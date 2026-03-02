@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AeroFlow – Wind Tunnel Puzzle</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #06060f; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ── CONFIG ──────────────────────────────────────────────────────────
+const PARTICLE_COUNT  = 700;
+const DEFLECT_RANGE   = 38;
+const DEFLECT_STR     = 0.55;
+const BASE_WIND       = 2.8;
+const PALETTE_W       = 90;
+const TARGET_NEED     = 0.45;      // flow fraction to "fill" a target
+const HUE_SLOW        = 200;       // blue
+const HUE_FAST        = 180;       // cyan
+
+// ── CANVAS SETUP ────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+let W, H, dpr;
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── MATH HELPERS ────────────────────────────────────────────────────
+const TAU = Math.PI * 2;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const lerp  = (a, b, t) => a + (b - a) * t;
+const dist  = (x1,y1,x2,y2) => Math.hypot(x2-x1, y2-y1);
+
+// ── PARTICLE ────────────────────────────────────────────────────────
+class Particle {
+  constructor() { this.reset(true); }
+  reset(scatter) {
+    this.x  = scatter ? Math.random() * W : PALETTE_W - Math.random() * 40;
+    this.y  = Math.random() * H;
+    this.vx = BASE_WIND + (Math.random() - 0.3) * 0.6;
+    this.vy = (Math.random() - 0.5) * 0.4;
+    this.sz = 1 + Math.random() * 1.2;
+    this.al = 0.25 + Math.random() * 0.45;
+  }
+  update(obstacles) {
+    // wind restoration
+    this.vx += (BASE_WIND - this.vx) * 0.012;
+    this.vy *= 0.992;
+    // obstacle deflection
+    for (const o of obstacles) {
+      const s = o.sdf(this.x, this.y);
+      if (s.d > DEFLECT_RANGE) continue;
+      if (s.d < 1) {
+        // push out hard
+        this.vx += s.nx * 3;
+        this.vy += s.ny * 3;
+      } else {
+        const t = 1 - s.d / DEFLECT_RANGE;
+        const f = t * t * DEFLECT_STR;
+        // tangent for flow-around
+        const dot = this.vx * (-s.ny) + this.vy * s.nx;
+        const ts  = dot >= 0 ? 1 : -1;
+        this.vx += s.nx * f * 0.55 + (-s.ny) * ts * f * 0.35;
+        this.vy += s.ny * f * 0.55 + ( s.nx) * ts * f * 0.35;
+      }
+    }
+    this.x += this.vx;
+    this.y += this.vy;
+    if (this.x > W + 30 || this.y < -30 || this.y > H + 30 || this.x < -60) this.reset(false);
+  }
+  draw() {
+    const spd = Math.hypot(this.vx, this.vy);
+    const t   = clamp(spd / (BASE_WIND * 2.2), 0, 1);
+    const lit = Math.round(55 + t * 40);
+    const sat = Math.round(90 - t * 40);
+    const hue = Math.round(lerp(HUE_SLOW, HUE_FAST, t));
+    ctx.strokeStyle = `hsla(${hue},${sat}%,${lit}%,${this.al})`;
+    ctx.lineWidth   = this.sz;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(this.x - this.vx * 2.5, this.y - this.vy * 2.5);
+    ctx.stroke();
+  }
+}
+
+// ── OBSTACLE (SDF-based) ───────────────────────────────────────────
+class Obstacle {
+  constructor(type, x, y, opts = {}) {
+    this.type = type; // 'rect' | 'circle'
+    this.x = x;
+    this.y = y;
+    this.rot   = opts.rot   || 0;
+    this.w     = opts.w     || 60;
+    this.h     = opts.h     || 16;
+    this.r     = opts.r     || 24;
+    this.fixed = !!opts.fixed;
+  }
+  sdf(px, py) {
+    if (this.type === 'circle') return this._circSDF(px, py);
+    return this._rectSDF(px, py);
+  }
+  _rectSDF(px, py) {
+    const c = Math.cos(-this.rot), s = Math.sin(-this.rot);
+    const dx = px - this.x, dy = py - this.y;
+    const lx = dx * c - dy * s, ly = dx * s + dy * c;
+    const hw = this.w / 2, hh = this.h / 2;
+    const ox = Math.abs(lx) - hw, oy = Math.abs(ly) - hh;
+    const od = Math.hypot(Math.max(ox,0), Math.max(oy,0));
+    const id = Math.min(Math.max(ox, oy), 0);
+    const d  = od + id;
+    let nx, ny;
+    if (ox > oy) { nx = lx > 0 ? 1 : -1; ny = 0; }
+    else         { nx = 0; ny = ly > 0 ? 1 : -1; }
+    const c2 = Math.cos(this.rot), s2 = Math.sin(this.rot);
+    return { d, nx: nx*c2 - ny*s2, ny: nx*s2 + ny*c2 };
+  }
+  _circSDF(px, py) {
+    const dx = px - this.x, dy = py - this.y;
+    const l  = Math.hypot(dx, dy) || 1;
+    return { d: l - this.r, nx: dx/l, ny: dy/l };
+  }
+  containsPoint(px, py) { return this.sdf(px, py).d < 0; }
+  draw(hl) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rot);
+    const fill   = this.fixed ? 'rgba(20,30,50,0.8)' : 'rgba(30,55,90,0.75)';
+    const stroke = hl ? '#66ccff' : this.fixed ? '#334466' : '#4499cc';
+    ctx.fillStyle   = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth   = hl ? 2.5 : 1.5;
+    if (this.type === 'rect') {
+      const hw = this.w/2, hh = this.h/2;
+      ctx.beginPath();
+      ctx.rect(-hw, -hh, this.w, this.h);
+      ctx.fill(); ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(0, 0, this.r, 0, TAU);
+      ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+// ── TARGET ZONE ────────────────────────────────────────────────────
+class Target {
+  constructor(x, y, w, h) {
+    this.x = x; this.y = y; this.w = w; this.h = h;
+    this.flow = 0; this.done = false; this.pulse = 0;
+  }
+  update(particles) {
+    let count = 0;
+    for (const p of particles) {
+      if (p.x > this.x && p.x < this.x + this.w &&
+          p.y > this.y && p.y < this.y + this.h) count++;
+    }
+    const ratio = count / (this.w * this.h * 0.012);
+    this.flow = lerp(this.flow, clamp(ratio, 0, 1), 0.04);
+    if (this.flow >= TARGET_NEED) this.done = true;
+    this.pulse += 0.05;
+  }
+  draw() {
+    const glow = this.done ? 0.7 : this.flow * 0.5;
+    const pulse = this.done ? 1 : 0.4 + Math.sin(this.pulse) * 0.15;
+    ctx.save();
+    if (glow > 0) {
+      ctx.shadowColor = '#00ff88';
+      ctx.shadowBlur  = 15 * glow;
+    }
+    ctx.strokeStyle = `rgba(0,${Math.round(180 + 75 * pulse)},${Math.round(100 + 50*pulse)},${0.4 + glow * 0.6})`;
+    ctx.lineWidth   = this.done ? 2.5 : 1.5;
+    if (!this.done) ctx.setLineDash([6, 4]);
+    ctx.strokeRect(this.x, this.y, this.w, this.h);
+    ctx.setLineDash([]);
+    // fill indicator
+    const fillH = this.h * clamp(this.flow / TARGET_NEED, 0, 1);
+    ctx.fillStyle = `rgba(0,255,136,${0.06 + glow * 0.10})`;
+    ctx.fillRect(this.x, this.y + this.h - fillH, this.w, fillH);
+    // label
+    ctx.shadowBlur = 0;
+    ctx.fillStyle  = `rgba(0,255,136,${0.5 + glow * 0.5})`;
+    ctx.font       = 'bold 11px monospace';
+    ctx.textAlign  = 'center';
+    ctx.fillText(this.done ? '✓' : Math.round(clamp(this.flow/TARGET_NEED,0,1)*100) + '%',
+                 this.x + this.w/2, this.y + this.h/2 + 4);
+    ctx.restore();
+  }
+}
+
+// ── LEVEL DEFINITIONS ──────────────────────────────────────────────
+const LEVELS = [
+  {
+    name: 'First Flight',
+    desc: 'Redirect the wind into the target zone.',
+    targets: [{x: 0.75, y: 0.2, w: 100, h: 100}],
+    fixed: [],
+    palette: [{type:'rect', w:80, h:14, count:2}],
+    stars: [1, 2]   // shapes used: <=1 → 3★, <=2 → 2★, else 1★
+  },
+  {
+    name: 'Split Stream',
+    desc: 'Hit both targets — top and bottom.',
+    targets: [{x:0.78, y:0.12, w:90, h:80}, {x:0.78, y:0.68, w:90, h:80}],
+    fixed: [],
+    palette: [{type:'rect', w:90, h:14, count:2}, {type:'circle', r:22, count:1}],
+    stars: [2, 3]
+  },
+  {
+    name: 'Detour',
+    desc: 'Guide wind around the wall.',
+    targets: [{x:0.78, y:0.40, w:90, h:90}],
+    fixed: [{type:'rect', x:0.55, y:0.50, w:14, h:220, rot:0}],
+    palette: [{type:'rect', w:80, h:14, count:3}],
+    stars: [2, 3]
+  },
+  {
+    name: 'Triple Threat',
+    desc: 'Three targets, three challenges.',
+    targets: [
+      {x:0.80, y:0.10, w:80, h:70},
+      {x:0.65, y:0.45, w:80, h:70},
+      {x:0.80, y:0.78, w:80, h:70}
+    ],
+    fixed: [{type:'rect', x:0.50, y:0.28, w:12, h:140, rot:0}],
+    palette: [{type:'rect', w:80, h:14, count:3}, {type:'circle', r:20, count:2}],
+    stars: [3, 5]
+  },
+  {
+    name: 'Wind Master',
+    desc: 'The ultimate aerodynamic puzzle.',
+    targets: [
+      {x:0.82, y:0.08, w:70, h:70},
+      {x:0.58, y:0.44, w:80, h:80},
+      {x:0.82, y:0.80, w:70, h:70}
+    ],
+    fixed: [
+      {type:'rect', x:0.42, y:0.30, w:12, h:160, rot:0},
+      {type:'rect', x:0.62, y:0.70, w:12, h:140, rot:0},
+      {type:'circle', x:0.52, y:0.55, r:28}
+    ],
+    palette: [{type:'rect', w:70, h:14, count:4}, {type:'circle', r:18, count:2}],
+    stars: [4, 6]
+  }
+];
+
+// ── GAME STATE ─────────────────────────────────────────────────────
+let screen     = 'title';   // 'title' | 'game' | 'complete'
+let levelIdx   = 0;
+let particles  = [];
+let placed     = [];         // player-placed obstacles
+let fixedObs   = [];         // level fixed obstacles
+let targets    = [];
+let palette    = [];         // {type, w, h, r, remaining}
+let bestStars  = new Array(LEVELS.length).fill(0);
+let shapesUsed = 0;
+
+// interaction
+let mouse = {x:0, y:0, down:false};
+let ghost = null;            // shape following cursor before placement
+let selectedIdx = -1;        // index in placed[]
+let hoverPalIdx = -1;
+let fadeAlpha = 1;           // for screen transitions
+let fadingTo  = null;
+
+// ── LEVEL LOADING ──────────────────────────────────────────────────
+function loadLevel(idx) {
+  levelIdx   = idx;
+  const def  = LEVELS[idx];
+  const areaW = W - PALETTE_W, areaH = H;
+
+  targets = def.targets.map(t => new Target(
+    PALETTE_W + t.x * areaW, t.y * areaH, t.w, t.h
+  ));
+  fixedObs = def.fixed.map(f => new Obstacle(f.type,
+    PALETTE_W + f.x * areaW, f.y * areaH,
+    { w: f.w, h: f.h, r: f.r, rot: f.rot || 0, fixed: true }
+  ));
+  palette = def.palette.map(p => ({
+    type: p.type, w: p.w, h: p.h, r: p.r, remaining: p.count
+  }));
+  placed     = [];
+  ghost      = null;
+  selectedIdx = -1;
+  shapesUsed = 0;
+  if (particles.length === 0) {
+    for (let i = 0; i < PARTICLE_COUNT; i++) particles.push(new Particle());
+  } else {
+    particles.forEach(p => p.reset(true));
+  }
+}
+
+// ── ALL OBSTACLES (combined) ───────────────────────────────────────
+function allObstacles() { return fixedObs.concat(placed); }
+
+// ── STAR RATING ────────────────────────────────────────────────────
+function calcStars() {
+  const s = LEVELS[levelIdx].stars;
+  if (shapesUsed <= s[0]) return 3;
+  if (shapesUsed <= s[1]) return 2;
+  return 1;
+}
+
+// ── INPUT ──────────────────────────────────────────────────────────
+canvas.addEventListener('mousemove', e => {
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+});
+canvas.addEventListener('mousedown', e => {
+  e.preventDefault();
+  mouse.down = true;
+  if (screen === 'title')    return handleTitleClick();
+  if (screen === 'complete') return handleCompleteClick();
+  if (screen === 'game')     return handleGameDown(e);
+});
+canvas.addEventListener('mouseup', e => { mouse.down = false; });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('keydown', e => {
+  if (screen !== 'game') return;
+  if (e.key === 'r' || e.key === 'R') {
+    if (ghost) ghost.rot = (ghost.rot || 0) + Math.PI / 8;
+  }
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (selectedIdx >= 0) removeShape(selectedIdx);
+  }
+  if (e.key === 'Escape') {
+    ghost = null;
+    selectedIdx = -1;
+  }
+});
+
+function handleTitleClick() {
+  if (fadingTo) return;
+  // check level buttons
+  const cols = Math.min(LEVELS.length, 5);
+  const bw = 56, gap = 14;
+  const totalW = cols * bw + (cols-1) * gap;
+  const sx = W/2 - totalW/2;
+  const sy = H/2 + 40;
+  for (let i = 0; i < LEVELS.length; i++) {
+    const bx = sx + i * (bw + gap);
+    if (mouse.x >= bx && mouse.x <= bx + bw && mouse.y >= sy && mouse.y <= sy + bw) {
+      loadLevel(i);
+      transitionTo('game');
+      return;
+    }
+  }
+}
+
+function handleCompleteClick() {
+  if (fadingTo) return;
+  // next level button
+  const btnW = 160, btnH = 44;
+  const bx = W/2 - btnW/2, by = H/2 + 70;
+  if (mouse.x >= bx && mouse.x <= bx+btnW && mouse.y >= by && mouse.y <= by+btnH) {
+    if (levelIdx < LEVELS.length - 1) {
+      loadLevel(levelIdx + 1);
+      transitionTo('game');
+    } else {
+      transitionTo('title');
+    }
+  }
+  // menu button
+  const mbx = W/2 - 60, mby = H/2 + 126;
+  if (mouse.x >= mbx && mouse.x <= mbx+120 && mouse.y >= mby && mouse.y <= mby+36) {
+    transitionTo('title');
+  }
+}
+
+function handleGameDown(e) {
+  const mx = mouse.x, my = mouse.y;
+
+  // place ghost
+  if (ghost) {
+    if (mx > PALETTE_W + 20) {
+      placed.push(new Obstacle(ghost.type, mx, my, {
+        w: ghost.w, h: ghost.h, r: ghost.r, rot: ghost.rot || 0
+      }));
+      shapesUsed++;
+      // decrement palette
+      for (const p of palette) {
+        if (p.type === ghost.type && p.w === ghost.w && p.h === ghost.h && p.r === ghost.r && p.remaining > 0) {
+          p.remaining--;
+          break;
+        }
+      }
+      ghost = null;
+    }
+    return;
+  }
+
+  // check palette click
+  if (mx < PALETTE_W) {
+    let py = 80;
+    for (const p of palette) {
+      if (p.remaining <= 0) { py += 72; continue; }
+      if (my >= py && my < py + 60) {
+        ghost = { type: p.type, w: p.w, h: p.h, r: p.r, rot: 0 };
+        selectedIdx = -1;
+        return;
+      }
+      py += 72;
+    }
+    // reset button
+    if (my > H - 52 && my < H - 12) {
+      loadLevel(levelIdx);
+      return;
+    }
+    // back button
+    if (my > H - 95 && my < H - 60) {
+      transitionTo('title');
+      return;
+    }
+    return;
+  }
+
+  // select placed obstacle (right-click removes)
+  for (let i = placed.length - 1; i >= 0; i--) {
+    if (placed[i].containsPoint(mx, my)) {
+      if (e.button === 2) { removeShape(i); return; }
+      selectedIdx = i;
+      return;
+    }
+  }
+  selectedIdx = -1;
+}
+
+function removeShape(idx) {
+  const obs = placed[idx];
+  // return to palette
+  for (const p of palette) {
+    if (p.type === obs.type && p.w === obs.w && p.h === obs.h) { p.remaining++; break; }
+    if (p.type === obs.type && p.type === 'circle') { p.remaining++; break; }
+  }
+  placed.splice(idx, 1);
+  shapesUsed = Math.max(0, shapesUsed - 1);
+  selectedIdx = -1;
+}
+
+// ── SCREEN TRANSITIONS ─────────────────────────────────────────────
+function transitionTo(newScreen) {
+  fadingTo = newScreen;
+  fadeAlpha = 0;
+}
+
+function updateTransition() {
+  if (!fadingTo) return;
+  fadeAlpha += 0.045;
+  if (fadeAlpha >= 1) {
+    screen    = fadingTo;
+    fadingTo  = null;
+    fadeAlpha = 1;
+  }
+}
+
+// ── RENDERING: TITLE SCREEN ────────────────────────────────────────
+function drawTitle() {
+  // background particles
+  const obs = allObstacles();
+  for (const p of particles) { p.update([]); p.draw(); }
+
+  // overlay
+  ctx.fillStyle = 'rgba(6,6,15,0.55)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#d0eeff';
+  ctx.font = 'bold 52px monospace';
+  ctx.fillText('AEROFLOW', W/2, H/2 - 60);
+
+  ctx.fillStyle = '#5599bb';
+  ctx.font = '16px monospace';
+  ctx.fillText('Wind Tunnel Puzzle', W/2, H/2 - 28);
+
+  // level buttons
+  const cols = Math.min(LEVELS.length, 5);
+  const bw = 56, gap = 14;
+  const totalW = cols * bw + (cols-1) * gap;
+  const sx = W/2 - totalW/2;
+  const sy = H/2 + 40;
+  ctx.font = 'bold 13px monospace';
+  for (let i = 0; i < LEVELS.length; i++) {
+    const bx = sx + i * (bw + gap);
+    const hover = mouse.x >= bx && mouse.x <= bx+bw && mouse.y >= sy && mouse.y <= sy+bw;
+    ctx.fillStyle = hover ? 'rgba(0,170,255,0.25)' : 'rgba(20,40,70,0.7)';
+    ctx.strokeStyle = hover ? '#44bbff' : '#335577';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(bx, sy, bw, bw, 6); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#cce8ff';
+    ctx.fillText(i + 1, bx + bw/2, sy + 24);
+    // stars
+    const s = bestStars[i];
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = '12px monospace';
+    ctx.fillText('★'.repeat(s) + '☆'.repeat(3-s), bx + bw/2, sy + 44);
+    ctx.font = 'bold 13px monospace';
+  }
+
+  ctx.fillStyle = '#445566';
+  ctx.font = '12px monospace';
+  ctx.fillText('Click a level to play  •  R to rotate  •  Right-click to remove', W/2, H - 30);
+}
+
+// ── RENDERING: GAME SCREEN ─────────────────────────────────────────
+function drawGame() {
+  const obs = allObstacles();
+
+  // update & draw particles
+  for (const p of particles) { p.update(obs); p.draw(); }
+
+  // targets
+  for (const t of targets) { t.update(particles); t.draw(); }
+
+  // fixed obstacles
+  for (const o of fixedObs) o.draw(false);
+
+  // placed obstacles
+  for (let i = 0; i < placed.length; i++) placed[i].draw(i === selectedIdx);
+
+  // ghost
+  if (ghost && mouse.x > PALETTE_W) {
+    ctx.globalAlpha = 0.45;
+    const tmp = new Obstacle(ghost.type, mouse.x, mouse.y, ghost);
+    tmp.draw(true);
+    ctx.globalAlpha = 1;
+  }
+
+  // ── PALETTE PANEL ──
+  ctx.fillStyle = 'rgba(6,10,20,0.92)';
+  ctx.fillRect(0, 0, PALETTE_W, H);
+  ctx.strokeStyle = '#1a3050';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PALETTE_W, 0); ctx.lineTo(PALETTE_W, H); ctx.stroke();
+
+  // level name
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#88bbdd';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillText('LVL ' + (levelIdx + 1), PALETTE_W/2, 24);
+  ctx.fillStyle = '#5588aa';
+  ctx.font = '10px monospace';
+  ctx.fillText(LEVELS[levelIdx].name, PALETTE_W/2, 40);
+
+  // shapes
+  let py = 80;
+  for (let i = 0; i < palette.length; i++) {
+    const p = palette[i];
+    const hover = mouse.x < PALETTE_W && mouse.y >= py && mouse.y < py + 60;
+    ctx.fillStyle = hover && p.remaining > 0 ? 'rgba(0,140,255,0.15)' : 'rgba(15,25,45,0.6)';
+    ctx.strokeStyle = '#1a3050';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(8, py, PALETTE_W - 16, 58, 5); ctx.fill(); ctx.stroke();
+
+    // shape preview
+    ctx.save();
+    ctx.translate(PALETTE_W/2, py + 26);
+    ctx.fillStyle = p.remaining > 0 ? 'rgba(40,80,130,0.9)' : 'rgba(25,35,50,0.5)';
+    ctx.strokeStyle = p.remaining > 0 ? '#4499cc' : '#223344';
+    ctx.lineWidth = 1.2;
+    if (p.type === 'rect') {
+      const pw = Math.min(p.w, 50) * 0.55, ph = Math.min(p.h, 30) * 0.8;
+      ctx.fillRect(-pw/2, -ph/2, pw, ph);
+      ctx.strokeRect(-pw/2, -ph/2, pw, ph);
+    } else {
+      const pr = Math.min(p.r, 20);
+      ctx.beginPath(); ctx.arc(0, 0, pr * 0.7, 0, TAU); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+
+    // count badge
+    ctx.fillStyle = p.remaining > 0 ? '#88ddff' : '#334455';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('×' + p.remaining, PALETTE_W/2, py + 52);
+    py += 72;
+  }
+
+  // reset button
+  const btnY = H - 52;
+  const rHover = mouse.x < PALETTE_W && mouse.y > btnY && mouse.y < btnY + 36;
+  ctx.fillStyle = rHover ? 'rgba(255,100,60,0.2)' : 'rgba(20,30,50,0.6)';
+  ctx.strokeStyle = '#664433';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(8, btnY, PALETTE_W-16, 36, 5); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#cc8866';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('Reset', PALETTE_W/2, btnY + 22);
+
+  // back button
+  const bkY = H - 95;
+  const bkHover = mouse.x < PALETTE_W && mouse.y > bkY && mouse.y < bkY + 36;
+  ctx.fillStyle = bkHover ? 'rgba(120,140,180,0.2)' : 'rgba(20,30,50,0.6)';
+  ctx.strokeStyle = '#334466';
+  ctx.beginPath(); ctx.roundRect(8, bkY, PALETTE_W-16, 36, 5); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#7799bb';
+  ctx.fillText('Menu', PALETTE_W/2, bkY + 22);
+
+  // hint text
+  ctx.fillStyle = '#334455';
+  ctx.font = '9px monospace';
+  ctx.fillText('R: rotate', PALETTE_W/2, 60);
+
+  // check completion
+  if (targets.every(t => t.done)) {
+    const earned = calcStars();
+    bestStars[levelIdx] = Math.max(bestStars[levelIdx], earned);
+    setTimeout(() => { if (screen === 'game') transitionTo('complete'); }, 600);
+  }
+}
+
+// ── RENDERING: LEVEL COMPLETE ──────────────────────────────────────
+function drawComplete() {
+  // keep particles flowing for background
+  const obs = allObstacles();
+  for (const p of particles) { p.update(obs); p.draw(); }
+  for (const t of targets) t.draw();
+  for (const o of fixedObs) o.draw(false);
+  for (const o of placed) o.draw(false);
+
+  // overlay
+  ctx.fillStyle = 'rgba(6,6,15,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#d0eeff';
+  ctx.font = 'bold 32px monospace';
+  ctx.fillText('Level Complete!', W/2, H/2 - 60);
+
+  const stars = calcStars();
+  ctx.font = '36px monospace';
+  ctx.fillStyle = '#ffcc00';
+  ctx.fillText('★'.repeat(stars) + '☆'.repeat(3 - stars), W/2, H/2);
+
+  ctx.fillStyle = '#6699aa';
+  ctx.font = '13px monospace';
+  ctx.fillText(`Shapes used: ${shapesUsed}`, W/2, H/2 + 34);
+
+  // next / finish button
+  const label = levelIdx < LEVELS.length - 1 ? 'Next Level' : 'Back to Menu';
+  const btnW = 160, btnH = 44;
+  const bx = W/2 - btnW/2, by = H/2 + 70;
+  const hover = mouse.x >= bx && mouse.x <= bx+btnW && mouse.y >= by && mouse.y <= by+btnH;
+  ctx.fillStyle = hover ? 'rgba(0,170,255,0.25)' : 'rgba(20,50,80,0.7)';
+  ctx.strokeStyle = hover ? '#44bbff' : '#335577';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(bx, by, btnW, btnH, 6); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#cce8ff';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText(label, W/2, by + 28);
+
+  // menu button
+  const mbx = W/2 - 60, mby = H/2 + 126;
+  const mHover = mouse.x >= mbx && mouse.x <= mbx+120 && mouse.y >= mby && mouse.y <= mby+36;
+  ctx.fillStyle = mHover ? 'rgba(120,140,180,0.2)' : 'rgba(20,30,50,0.5)';
+  ctx.strokeStyle = '#334466';
+  ctx.beginPath(); ctx.roundRect(mbx, mby, 120, 36, 5); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#7799bb';
+  ctx.font = '12px monospace';
+  ctx.fillText('Menu', W/2, mby + 22);
+}
+
+// ── MAIN LOOP ──────────────────────────────────────────────────────
+function loop() {
+  ctx.clearRect(0, 0, W, H);
+
+  // dark gradient background
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#06060f');
+  bg.addColorStop(1, '#0a0f1e');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // faint grid
+  ctx.strokeStyle = 'rgba(30,50,80,0.12)';
+  ctx.lineWidth = 0.5;
+  const gs = 40;
+  for (let x = PALETTE_W; x < W; x += gs) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += gs) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // wind arrows (subtle)
+  ctx.strokeStyle = 'rgba(30,60,100,0.18)';
+  ctx.lineWidth = 1;
+  for (let y = 30; y < H; y += 60) {
+    for (let x = PALETTE_W + 30; x < W - 30; x += 80) {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 16, y);
+      ctx.lineTo(x + 12, y - 3);
+      ctx.moveTo(x + 16, y);
+      ctx.lineTo(x + 12, y + 3);
+      ctx.stroke();
+    }
+  }
+
+  // draw current screen
+  if (screen === 'title')    drawTitle();
+  if (screen === 'game')     drawGame();
+  if (screen === 'complete') drawComplete();
+
+  // transition overlay
+  if (fadingTo) {
+    updateTransition();
+    ctx.fillStyle = `rgba(6,6,15,${1 - Math.abs(fadeAlpha * 2 - 1)})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// ── INIT ───────────────────────────────────────────────────────────
+for (let i = 0; i < PARTICLE_COUNT; i++) particles.push(new Particle());
+loop();
+</script>
+</body>
+</html>

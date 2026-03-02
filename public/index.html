@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UK &amp; Ireland Production Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="header">
+    <img src="logo.svg" alt="The Pastry Shop" class="header-logo-img">
+    <h1 class="header-title">UK &amp; Ireland Production Tracker</h1>
+  </header>
+
+  <!-- Top Bar -->
+  <nav class="top-bar">
+    <div class="top-bar-left">
+      <button class="top-bar-btn scrape-btn" id="btn-scrape" onclick="triggerScrape()">
+        &#x1F50D; Search Now
+      </button>
+      <div class="scrape-status" id="scrape-status">Loading status...</div>
+    </div>
+    <div class="top-bar-right">
+      <button class="top-bar-btn" id="btn-archived" onclick="toggleArchivedView()">View Archived Items</button>
+      <button class="top-bar-btn sort-btn active" id="sort-date" onclick="toggleSort('publication_date')">
+        Sort by PublicationDate <span class="arrow" id="sort-date-arrow">▼</span>
+      </button>
+      <button class="top-bar-btn sort-btn" id="sort-genre" onclick="toggleSort('genre')">
+        Sort by Genre <span class="arrow" id="sort-genre-arrow">▼</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Cards Container -->
+  <main class="container" id="cards-container">
+    <div class="empty-state" id="loading">Loading productions...</div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
