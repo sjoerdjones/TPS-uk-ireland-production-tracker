@@ -1,8 +1,8 @@
 {
   "name": "warpdev",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "UK & Ireland Production Tracker",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "build": "npm install --build-from-source",
