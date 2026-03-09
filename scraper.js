@@ -1110,6 +1110,7 @@ Extract the following fields as JSON (use null if not found):
 - release_year: Expected release year or "TBD"
 - studio: Production companies/studios involved
 - personnel: Key personnel (directors, writers, cast, producers)
+- background: 1-2 sentences about the production company's notable work OR the director/key talent's previous credits (e.g., "Element Pictures previously produced The Favourite and Room" or "Director John Smith helmed the acclaimed drama XYZ")
 
 Return ONLY valid JSON, no markdown.`;
 
@@ -1128,6 +1129,7 @@ Return ONLY valid JSON, no markdown.`;
         : new Date().toISOString().split('T')[0],
       studio: data.studio || 'Studio/Production Company not yet announced',
       personnel: data.personnel || 'Key personnel details not yet announced',
+      background: data.background || null,
       source_title: article.title,
       source_url: typeof article.link === 'string' ? article.link : '',
     };

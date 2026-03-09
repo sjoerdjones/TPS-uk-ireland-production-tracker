@@ -3,733 +3,649 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AeroFlow – Wind Tunnel Puzzle</title>
+<title>AeroFlow – Wind Tunnel Challenge</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #06060f; }
-  canvas { display: block; }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#060610}
+  canvas{display:block;cursor:crosshair}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <script>
-// ── CONFIG ──────────────────────────────────────────────────────────
-const PARTICLE_COUNT  = 700;
-const DEFLECT_RANGE   = 38;
-const DEFLECT_STR     = 0.55;
-const BASE_WIND       = 2.8;
-const PALETTE_W       = 90;
-const TARGET_NEED     = 0.45;      // flow fraction to "fill" a target
-const HUE_SLOW        = 200;       // blue
-const HUE_FAST        = 180;       // cyan
+'use strict';
+// ═══════════════════════════════════════════════════════════════
+//  CONFIG
+// ═══════════════════════════════════════════════════════════════
+const COLS=18, ROWS=11, CELL=38;
+const PAL_W=112;
+const MAX_TIME=32, MAX_WIND=30;
+const PARTICLE_N=650;
+const DEFLECT_R=34, DEFLECT_F=0.48;
+const TAU=Math.PI*2;
 
-// ── CANVAS SETUP ────────────────────────────────────────────────────
-const canvas = document.getElementById('c');
-const ctx    = canvas.getContext('2d');
-let W, H, dpr;
-
-function resize() {
-  dpr = window.devicePixelRatio || 1;
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width  = W * dpr;
-  canvas.height = H * dpr;
-  canvas.style.width  = W + 'px';
-  canvas.style.height = H + 'px';
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+// ═══════════════════════════════════════════════════════════════
+//  CANVAS
+// ═══════════════════════════════════════════════════════════════
+const cv=document.getElementById('c'), cx=cv.getContext('2d');
+let W,H,dpr,gx0,gy0;
+function resize(){
+  dpr=devicePixelRatio||1; W=innerWidth; H=innerHeight;
+  cv.width=W*dpr; cv.height=H*dpr;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cx.setTransform(dpr,0,0,dpr,0,0);
+  gx0=PAL_W+(W-PAL_W-COLS*CELL)/2;
+  gy0=(H-ROWS*CELL)/2;
 }
-window.addEventListener('resize', resize);
-resize();
+addEventListener('resize',resize); resize();
 
-// ── MATH HELPERS ────────────────────────────────────────────────────
-const TAU = Math.PI * 2;
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-const lerp  = (a, b, t) => a + (b - a) * t;
-const dist  = (x1,y1,x2,y2) => Math.hypot(x2-x1, y2-y1);
+// ═══════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const lerp=(a,b,t)=>a+(b-a)*t;
+function hcol(h,s,l,a){return `hsla(${h},${s}%,${l}%,${a})`}
 
-// ── PARTICLE ────────────────────────────────────────────────────────
-class Particle {
-  constructor() { this.reset(true); }
-  reset(scatter) {
-    this.x  = scatter ? Math.random() * W : PALETTE_W - Math.random() * 40;
-    this.y  = Math.random() * H;
-    this.vx = BASE_WIND + (Math.random() - 0.3) * 0.6;
-    this.vy = (Math.random() - 0.5) * 0.4;
-    this.sz = 1 + Math.random() * 1.2;
-    this.al = 0.25 + Math.random() * 0.45;
+// ═══════════════════════════════════════════════════════════════
+//  PIECE TYPES
+// ═══════════════════════════════════════════════════════════════
+const T={
+  block:{name:'Block', hp:130, drag:1.0, col:'#4488bb',stk:'#66aadd',
+         desc:'Sturdy all-rounder'},
+  wedge:{name:'Wedge', hp:85, drag:[0.28,0.65,1.35,0.65],
+         col:'#33aa88',stk:'#55ccaa',desc:'Aero — R to rotate'},
+  wheel:{name:'Wheel', hp:100, drag:0.45, col:'#cc9933',stk:'#eebb55',
+         desc:'Round, low drag'},
+  heavy:{name:'Heavy', hp:260, drag:1.25, col:'#8866bb',stk:'#aa88dd',
+         desc:'Very tough, high drag'}
+};
+const TKEYS=['block','wedge','wheel','heavy'];
+function gdrag(type,rot){const d=T[type].drag;return Array.isArray(d)?d[rot%4]:d;}
+
+// ═══════════════════════════════════════════════════════════════
+//  GRID
+// ═══════════════════════════════════════════════════════════════
+let grid=[], totalBuilt=0;
+function initGrid(){
+  grid=[]; for(let r=0;r<ROWS;r++) grid[r]=Array(COLS).fill(null);
+  totalBuilt=0;
+}
+initGrid();
+
+function place(type,c,r,rot){
+  if(r<0||r>=ROWS||c<0||c>=COLS||grid[r][c]) return false;
+  grid[r][c]={type,c,r,rot:rot||0,hp:T[type].hp,maxHp:T[type].hp,flash:0};
+  totalBuilt++; return true;
+}
+function removeAt(c,r){
+  if(!grid[r]||!grid[r][c]) return;
+  grid[r][c]=null; totalBuilt--;
+}
+function cellXY(c,r){return{x:gx0+c*CELL+CELL/2,y:gy0+r*CELL+CELL/2}}
+function toGrid(mx,my){return{c:Math.floor((mx-gx0)/CELL),r:Math.floor((my-gy0)/CELL)}}
+function inGrid(c,r){return c>=0&&c<COLS&&r>=0&&r<ROWS}
+function ncount(c,r){
+  let n=0;
+  if(r>0&&grid[r-1][c])n++; if(r<ROWS-1&&grid[r+1][c])n++;
+  if(c>0&&grid[r][c-1])n++; if(c<COLS-1&&grid[r][c+1])n++;
+  return n;
+}
+function activePcs(){
+  const a=[]; for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) if(grid[r][c]) a.push(grid[r][c]);
+  return a;
+}
+
+// BFS from ground row
+function connMap(){
+  const vis=[]; for(let r=0;r<ROWS;r++) vis[r]=Array(COLS).fill(false);
+  const q=[];
+  for(let c=0;c<COLS;c++) if(grid[ROWS-1][c]){vis[ROWS-1][c]=true;q.push(ROWS-1,c);}
+  const D=[[-1,0],[1,0],[0,-1],[0,1]];
+  for(let i=0;i<q.length;i+=2){
+    const r=q[i],c=q[i+1];
+    for(const[dr,dc] of D){const nr=r+dr,nc=c+dc;
+      if(nr>=0&&nr<ROWS&&nc>=0&&nc<COLS&&!vis[nr][nc]&&grid[nr][nc]){vis[nr][nc]=true;q.push(nr,nc);}}
   }
-  update(obstacles) {
-    // wind restoration
-    this.vx += (BASE_WIND - this.vx) * 0.012;
-    this.vy *= 0.992;
-    // obstacle deflection
-    for (const o of obstacles) {
-      const s = o.sdf(this.x, this.y);
-      if (s.d > DEFLECT_RANGE) continue;
-      if (s.d < 1) {
-        // push out hard
-        this.vx += s.nx * 3;
-        this.vy += s.ny * 3;
-      } else {
-        const t = 1 - s.d / DEFLECT_RANGE;
-        const f = t * t * DEFLECT_STR;
-        // tangent for flow-around
-        const dot = this.vx * (-s.ny) + this.vy * s.nx;
-        const ts  = dot >= 0 ? 1 : -1;
-        this.vx += s.nx * f * 0.55 + (-s.ny) * ts * f * 0.35;
-        this.vy += s.ny * f * 0.55 + ( s.nx) * ts * f * 0.35;
+  return vis;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SDF  (particle deflection)
+// ═══════════════════════════════════════════════════════════════
+function pSDF(pc,px,py){
+  const o=cellXY(pc.c,pc.r), hs=CELL/2-2;
+  const lx=px-o.x, ly=py-o.y;
+  if(pc.type==='wheel') return cSDF(lx,ly,hs);
+  if(pc.type==='wedge') return wSDF(lx,ly,hs,pc.rot);
+  return rSDF(lx,ly,hs,hs);
+}
+function rSDF(lx,ly,hw,hh){
+  const ox=Math.abs(lx)-hw, oy=Math.abs(ly)-hh;
+  const d=Math.hypot(Math.max(ox,0),Math.max(oy,0))+Math.min(Math.max(ox,oy),0);
+  let nx,ny;
+  if(ox>oy){nx=lx>0?1:-1;ny=0}else{nx=0;ny=ly>0?1:-1}
+  return{d,nx,ny};
+}
+function cSDF(lx,ly,r){
+  const l=Math.hypot(lx,ly)||1;
+  return{d:l-r,nx:lx/l,ny:ly/l};
+}
+function wSDF(lx,ly,hs,rot){
+  let v;
+  switch(rot%4){
+    case 0:v=[[-hs,0],[hs,-hs],[hs,hs]];break;
+    case 1:v=[[0,-hs],[hs,hs],[-hs,hs]];break;
+    case 2:v=[[hs,0],[-hs,hs],[-hs,-hs]];break;
+    case 3:v=[[0,hs],[-hs,-hs],[hs,-hs]];break;
+  }
+  return tSDF(lx,ly,v);
+}
+function tSDF(px,py,v){
+  let md=1e9,bnx=0,bny=1,ins=true;
+  for(let i=0;i<3;i++){
+    const ax=v[i][0],ay=v[i][1],bx=v[(i+1)%3][0],by=v[(i+1)%3][1];
+    const ex=bx-ax,ey=by-ay,el2=ex*ex+ey*ey,el=Math.sqrt(el2);
+    const vx=px-ax,vy=py-ay;
+    const t=clamp((vx*ex+vy*ey)/el2,0,1);
+    const cx2=vx-ex*t,cy2=vy-ey*t,d2=cx2*cx2+cy2*cy2;
+    const nx=ey/el,ny=-ex/el;
+    if(d2<md){md=d2;bnx=nx;bny=ny;}
+    if(ex*vy-ey*vx<0)ins=false;
+  }
+  const d=Math.sqrt(md);
+  return{d:ins?-d:d,nx:bnx,ny:bny};
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PARTICLES
+// ═══════════════════════════════════════════════════════════════
+let particles=[];
+class Particle{
+  constructor(){this.reset(true)}
+  reset(s){
+    this.x=s?PAL_W+Math.random()*(W-PAL_W):PAL_W-20-Math.random()*30;
+    this.y=Math.random()*H;
+    this.vx=Math.max(wind*0.65,0.8)+Math.random()*0.4;
+    this.vy=(Math.random()-0.5)*0.4;
+    this.sz=0.8+Math.random()*1.1;
+    this.al=0.18+Math.random()*0.38;
+  }
+  update(obs){
+    this.vx+=(Math.max(wind*0.65,0.8)-this.vx)*0.018;
+    this.vy*=0.992;
+    if(testing) this.vy+=(Math.random()-0.5)*wind*0.006;
+    for(const o of obs){
+      const s=pSDF(o,this.x,this.y);
+      if(s.d>DEFLECT_R) continue;
+      if(s.d<1){this.vx+=s.nx*2.8;this.vy+=s.ny*2.8;}
+      else{
+        const t=1-s.d/DEFLECT_R, f=t*t*DEFLECT_F;
+        const dot=this.vx*(-s.ny)+this.vy*s.nx, ts=dot>=0?1:-1;
+        this.vx+=s.nx*f*0.52+(-s.ny)*ts*f*0.32;
+        this.vy+=s.ny*f*0.52+s.nx*ts*f*0.32;
       }
     }
-    this.x += this.vx;
-    this.y += this.vy;
-    if (this.x > W + 30 || this.y < -30 || this.y > H + 30 || this.x < -60) this.reset(false);
+    this.x+=this.vx; this.y+=this.vy;
+    if(this.x>W+30||this.y<-30||this.y>H+30||this.x<-50) this.reset(false);
   }
-  draw() {
-    const spd = Math.hypot(this.vx, this.vy);
-    const t   = clamp(spd / (BASE_WIND * 2.2), 0, 1);
-    const lit = Math.round(55 + t * 40);
-    const sat = Math.round(90 - t * 40);
-    const hue = Math.round(lerp(HUE_SLOW, HUE_FAST, t));
-    ctx.strokeStyle = `hsla(${hue},${sat}%,${lit}%,${this.al})`;
-    ctx.lineWidth   = this.sz;
-    ctx.beginPath();
-    ctx.moveTo(this.x, this.y);
-    ctx.lineTo(this.x - this.vx * 2.5, this.y - this.vy * 2.5);
-    ctx.stroke();
+  draw(){
+    const sp=Math.hypot(this.vx,this.vy), t=clamp(sp/18,0,1);
+    cx.strokeStyle=hcol(Math.round(lerp(210,180,t)),Math.round(85-t*30),Math.round(48+t*42),this.al);
+    cx.lineWidth=this.sz;
+    cx.beginPath();cx.moveTo(this.x,this.y);
+    cx.lineTo(this.x-this.vx*2.2,this.y-this.vy*2.2);cx.stroke();
   }
 }
 
-// ── OBSTACLE (SDF-based) ───────────────────────────────────────────
-class Obstacle {
-  constructor(type, x, y, opts = {}) {
-    this.type = type; // 'rect' | 'circle'
-    this.x = x;
-    this.y = y;
-    this.rot   = opts.rot   || 0;
-    this.w     = opts.w     || 60;
-    this.h     = opts.h     || 16;
-    this.r     = opts.r     || 24;
-    this.fixed = !!opts.fixed;
-  }
-  sdf(px, py) {
-    if (this.type === 'circle') return this._circSDF(px, py);
-    return this._rectSDF(px, py);
-  }
-  _rectSDF(px, py) {
-    const c = Math.cos(-this.rot), s = Math.sin(-this.rot);
-    const dx = px - this.x, dy = py - this.y;
-    const lx = dx * c - dy * s, ly = dx * s + dy * c;
-    const hw = this.w / 2, hh = this.h / 2;
-    const ox = Math.abs(lx) - hw, oy = Math.abs(ly) - hh;
-    const od = Math.hypot(Math.max(ox,0), Math.max(oy,0));
-    const id = Math.min(Math.max(ox, oy), 0);
-    const d  = od + id;
-    let nx, ny;
-    if (ox > oy) { nx = lx > 0 ? 1 : -1; ny = 0; }
-    else         { nx = 0; ny = ly > 0 ? 1 : -1; }
-    const c2 = Math.cos(this.rot), s2 = Math.sin(this.rot);
-    return { d, nx: nx*c2 - ny*s2, ny: nx*s2 + ny*c2 };
-  }
-  _circSDF(px, py) {
-    const dx = px - this.x, dy = py - this.y;
-    const l  = Math.hypot(dx, dy) || 1;
-    return { d: l - this.r, nx: dx/l, ny: dy/l };
-  }
-  containsPoint(px, py) { return this.sdf(px, py).d < 0; }
-  draw(hl) {
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    ctx.rotate(this.rot);
-    const fill   = this.fixed ? 'rgba(20,30,50,0.8)' : 'rgba(30,55,90,0.75)';
-    const stroke = hl ? '#66ccff' : this.fixed ? '#334466' : '#4499cc';
-    ctx.fillStyle   = fill;
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth   = hl ? 2.5 : 1.5;
-    if (this.type === 'rect') {
-      const hw = this.w/2, hh = this.h/2;
-      ctx.beginPath();
-      ctx.rect(-hw, -hh, this.w, this.h);
-      ctx.fill(); ctx.stroke();
-    } else {
-      ctx.beginPath();
-      ctx.arc(0, 0, this.r, 0, TAU);
-      ctx.fill(); ctx.stroke();
+// ═══════════════════════════════════════════════════════════════
+//  DEBRIS
+// ═══════════════════════════════════════════════════════════════
+let debris=[];
+function spawnDebris(pc){
+  const o=cellXY(pc.c,pc.r);
+  debris.push({type:pc.type,rot:pc.rot,x:o.x,y:o.y,
+    vx:1.5+wind*0.12+Math.random()*2,vy:(Math.random()-0.5)*5,
+    av:(Math.random()-0.5)*0.35,a:0,life:1});
+  for(let i=0;i<6;i++)
+    debris.push({type:'spark',x:o.x,y:o.y,
+      vx:(Math.random()-0.5)*4+wind*0.08,vy:(Math.random()-0.5)*4,
+      av:0,a:0,life:0.5+Math.random()*0.3});
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════
+let screen='title';
+let selType=null, selRot=0;
+let mouse={x:0,y:0};
+let wind=0, testTime=0, testing=false;
+let survived=0, piecesLeft=0, startCount=0;
+let fade=0, fadeTo=null;
+let bestTime=0;
+
+// ═══════════════════════════════════════════════════════════════
+//  TEST SIMULATION
+// ═══════════════════════════════════════════════════════════════
+function startTest(){
+  const ap=activePcs();
+  if(!ap.length) return;
+  screen='test'; testing=true;
+  testTime=0; wind=0; debris=[];
+  startCount=ap.length;
+  particles.forEach(p=>p.reset(true));
+}
+
+function updateTest(){
+  testTime+=1/60;
+  const t=clamp(testTime/MAX_TIME,0,1);
+  wind=t*t*MAX_WIND;
+
+  const ap=activePcs();
+  piecesLeft=ap.length;
+
+  for(const p of ap){
+    let exp=1;
+    for(let x=p.c-1;x>=0;x--){if(grid[p.r][x])exp*=0.28; else break;}
+    if(p.c>0){
+      if(p.r>0&&grid[p.r-1][p.c-1]) exp*=0.75;
+      if(p.r<ROWS-1&&grid[p.r+1][p.c-1]) exp*=0.75;
     }
-    ctx.restore();
+    const d=gdrag(p.type,p.rot);
+    const force=d*exp*wind*wind*0.00075;
+    const hMul=1+0.1*(ROWS-1-p.r);
+    const nMul=1/(1+ncount(p.c,p.r)*0.28);
+    const stress=force*hMul*nMul;
+    p.hp-=stress;
+    if(stress>0.4) p.flash=Math.min(p.flash+0.15,1);
+    else p.flash*=0.92;
+    if(p.hp<=0) breakPc(p);
+  }
+
+  const vis=connMap();
+  for(const p of activePcs()){
+    if(!vis[p.r][p.c]) breakPc(p);
+  }
+
+  for(const d of debris){
+    d.x+=d.vx;d.y+=d.vy;
+    d.vy+=0.18;d.vx+=wind*0.003;
+    d.a+=d.av;d.life-=(d.type==='spark'?0.035:0.014);
+  }
+  debris=debris.filter(d=>d.life>0);
+
+  const obs=activePcs();
+  for(const p of particles) p.update(obs);
+
+  if(activePcs().length===0||testTime>=MAX_TIME){
+    survived=testTime;
+    piecesLeft=activePcs().length;
+    testing=false;
+    if(survived>bestTime) bestTime=survived;
+    trans('result');
   }
 }
 
-// ── TARGET ZONE ────────────────────────────────────────────────────
-class Target {
-  constructor(x, y, w, h) {
-    this.x = x; this.y = y; this.w = w; this.h = h;
-    this.flow = 0; this.done = false; this.pulse = 0;
-  }
-  update(particles) {
-    let count = 0;
-    for (const p of particles) {
-      if (p.x > this.x && p.x < this.x + this.w &&
-          p.y > this.y && p.y < this.y + this.h) count++;
-    }
-    const ratio = count / (this.w * this.h * 0.012);
-    this.flow = lerp(this.flow, clamp(ratio, 0, 1), 0.04);
-    if (this.flow >= TARGET_NEED) this.done = true;
-    this.pulse += 0.05;
-  }
-  draw() {
-    const glow = this.done ? 0.7 : this.flow * 0.5;
-    const pulse = this.done ? 1 : 0.4 + Math.sin(this.pulse) * 0.15;
-    ctx.save();
-    if (glow > 0) {
-      ctx.shadowColor = '#00ff88';
-      ctx.shadowBlur  = 15 * glow;
-    }
-    ctx.strokeStyle = `rgba(0,${Math.round(180 + 75 * pulse)},${Math.round(100 + 50*pulse)},${0.4 + glow * 0.6})`;
-    ctx.lineWidth   = this.done ? 2.5 : 1.5;
-    if (!this.done) ctx.setLineDash([6, 4]);
-    ctx.strokeRect(this.x, this.y, this.w, this.h);
-    ctx.setLineDash([]);
-    // fill indicator
-    const fillH = this.h * clamp(this.flow / TARGET_NEED, 0, 1);
-    ctx.fillStyle = `rgba(0,255,136,${0.06 + glow * 0.10})`;
-    ctx.fillRect(this.x, this.y + this.h - fillH, this.w, fillH);
-    // label
-    ctx.shadowBlur = 0;
-    ctx.fillStyle  = `rgba(0,255,136,${0.5 + glow * 0.5})`;
-    ctx.font       = 'bold 11px monospace';
-    ctx.textAlign  = 'center';
-    ctx.fillText(this.done ? '✓' : Math.round(clamp(this.flow/TARGET_NEED,0,1)*100) + '%',
-                 this.x + this.w/2, this.y + this.h/2 + 4);
-    ctx.restore();
-  }
+function breakPc(p){
+  if(!grid[p.r][p.c]) return;
+  spawnDebris(p);
+  grid[p.r][p.c]=null;
 }
 
-// ── LEVEL DEFINITIONS ──────────────────────────────────────────────
-const LEVELS = [
-  {
-    name: 'First Flight',
-    desc: 'Redirect the wind into the target zone.',
-    targets: [{x: 0.75, y: 0.2, w: 100, h: 100}],
-    fixed: [],
-    palette: [{type:'rect', w:80, h:14, count:2}],
-    stars: [1, 2]   // shapes used: <=1 → 3★, <=2 → 2★, else 1★
-  },
-  {
-    name: 'Split Stream',
-    desc: 'Hit both targets — top and bottom.',
-    targets: [{x:0.78, y:0.12, w:90, h:80}, {x:0.78, y:0.68, w:90, h:80}],
-    fixed: [],
-    palette: [{type:'rect', w:90, h:14, count:2}, {type:'circle', r:22, count:1}],
-    stars: [2, 3]
-  },
-  {
-    name: 'Detour',
-    desc: 'Guide wind around the wall.',
-    targets: [{x:0.78, y:0.40, w:90, h:90}],
-    fixed: [{type:'rect', x:0.55, y:0.50, w:14, h:220, rot:0}],
-    palette: [{type:'rect', w:80, h:14, count:3}],
-    stars: [2, 3]
-  },
-  {
-    name: 'Triple Threat',
-    desc: 'Three targets, three challenges.',
-    targets: [
-      {x:0.80, y:0.10, w:80, h:70},
-      {x:0.65, y:0.45, w:80, h:70},
-      {x:0.80, y:0.78, w:80, h:70}
-    ],
-    fixed: [{type:'rect', x:0.50, y:0.28, w:12, h:140, rot:0}],
-    palette: [{type:'rect', w:80, h:14, count:3}, {type:'circle', r:20, count:2}],
-    stars: [3, 5]
-  },
-  {
-    name: 'Wind Master',
-    desc: 'The ultimate aerodynamic puzzle.',
-    targets: [
-      {x:0.82, y:0.08, w:70, h:70},
-      {x:0.58, y:0.44, w:80, h:80},
-      {x:0.82, y:0.80, w:70, h:70}
-    ],
-    fixed: [
-      {type:'rect', x:0.42, y:0.30, w:12, h:160, rot:0},
-      {type:'rect', x:0.62, y:0.70, w:12, h:140, rot:0},
-      {type:'circle', x:0.52, y:0.55, r:28}
-    ],
-    palette: [{type:'rect', w:70, h:14, count:4}, {type:'circle', r:18, count:2}],
-    stars: [4, 6]
-  }
-];
+// ═══════════════════════════════════════════════════════════════
+//  TRANSITIONS
+// ═══════════════════════════════════════════════════════════════
+function trans(to){fadeTo=to;fade=0;}
+function updateFade(){if(!fadeTo)return;fade+=0.05;if(fade>=1){screen=fadeTo;fadeTo=null;fade=1;}}
 
-// ── GAME STATE ─────────────────────────────────────────────────────
-let screen     = 'title';   // 'title' | 'game' | 'complete'
-let levelIdx   = 0;
-let particles  = [];
-let placed     = [];         // player-placed obstacles
-let fixedObs   = [];         // level fixed obstacles
-let targets    = [];
-let palette    = [];         // {type, w, h, r, remaining}
-let bestStars  = new Array(LEVELS.length).fill(0);
-let shapesUsed = 0;
-
-// interaction
-let mouse = {x:0, y:0, down:false};
-let ghost = null;            // shape following cursor before placement
-let selectedIdx = -1;        // index in placed[]
-let hoverPalIdx = -1;
-let fadeAlpha = 1;           // for screen transitions
-let fadingTo  = null;
-
-// ── LEVEL LOADING ──────────────────────────────────────────────────
-function loadLevel(idx) {
-  levelIdx   = idx;
-  const def  = LEVELS[idx];
-  const areaW = W - PALETTE_W, areaH = H;
-
-  targets = def.targets.map(t => new Target(
-    PALETTE_W + t.x * areaW, t.y * areaH, t.w, t.h
-  ));
-  fixedObs = def.fixed.map(f => new Obstacle(f.type,
-    PALETTE_W + f.x * areaW, f.y * areaH,
-    { w: f.w, h: f.h, r: f.r, rot: f.rot || 0, fixed: true }
-  ));
-  palette = def.palette.map(p => ({
-    type: p.type, w: p.w, h: p.h, r: p.r, remaining: p.count
-  }));
-  placed     = [];
-  ghost      = null;
-  selectedIdx = -1;
-  shapesUsed = 0;
-  if (particles.length === 0) {
-    for (let i = 0; i < PARTICLE_COUNT; i++) particles.push(new Particle());
-  } else {
-    particles.forEach(p => p.reset(true));
-  }
-}
-
-// ── ALL OBSTACLES (combined) ───────────────────────────────────────
-function allObstacles() { return fixedObs.concat(placed); }
-
-// ── STAR RATING ────────────────────────────────────────────────────
-function calcStars() {
-  const s = LEVELS[levelIdx].stars;
-  if (shapesUsed <= s[0]) return 3;
-  if (shapesUsed <= s[1]) return 2;
-  return 1;
-}
-
-// ── INPUT ──────────────────────────────────────────────────────────
-canvas.addEventListener('mousemove', e => {
-  mouse.x = e.clientX;
-  mouse.y = e.clientY;
-});
-canvas.addEventListener('mousedown', e => {
+// ═══════════════════════════════════════════════════════════════
+//  INPUT
+// ═══════════════════════════════════════════════════════════════
+cv.addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
+cv.addEventListener('mousedown',e=>{
   e.preventDefault();
-  mouse.down = true;
-  if (screen === 'title')    return handleTitleClick();
-  if (screen === 'complete') return handleCompleteClick();
-  if (screen === 'game')     return handleGameDown(e);
+  if(fadeTo) return;
+  if(screen==='title') return clickTitle();
+  if(screen==='build') return clickBuild(e);
+  if(screen==='result') return clickResult();
 });
-canvas.addEventListener('mouseup', e => { mouse.down = false; });
-canvas.addEventListener('contextmenu', e => e.preventDefault());
-window.addEventListener('keydown', e => {
-  if (screen !== 'game') return;
-  if (e.key === 'r' || e.key === 'R') {
-    if (ghost) ghost.rot = (ghost.rot || 0) + Math.PI / 8;
-  }
-  if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (selectedIdx >= 0) removeShape(selectedIdx);
-  }
-  if (e.key === 'Escape') {
-    ghost = null;
-    selectedIdx = -1;
-  }
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+addEventListener('keydown',e=>{
+  if(e.key==='r'||e.key==='R') selRot=(selRot+1)%4;
+  if(e.key==='Escape') selType=null;
+  if(e.key===' '&&screen==='build'){e.preventDefault();startTest();}
 });
 
-function handleTitleClick() {
-  if (fadingTo) return;
-  // check level buttons
-  const cols = Math.min(LEVELS.length, 5);
-  const bw = 56, gap = 14;
-  const totalW = cols * bw + (cols-1) * gap;
-  const sx = W/2 - totalW/2;
-  const sy = H/2 + 40;
-  for (let i = 0; i < LEVELS.length; i++) {
-    const bx = sx + i * (bw + gap);
-    if (mouse.x >= bx && mouse.x <= bx + bw && mouse.y >= sy && mouse.y <= sy + bw) {
-      loadLevel(i);
-      transitionTo('game');
-      return;
-    }
-  }
-}
+function clickTitle(){trans('build');}
 
-function handleCompleteClick() {
-  if (fadingTo) return;
-  // next level button
-  const btnW = 160, btnH = 44;
-  const bx = W/2 - btnW/2, by = H/2 + 70;
-  if (mouse.x >= bx && mouse.x <= bx+btnW && mouse.y >= by && mouse.y <= by+btnH) {
-    if (levelIdx < LEVELS.length - 1) {
-      loadLevel(levelIdx + 1);
-      transitionTo('game');
-    } else {
-      transitionTo('title');
+function clickBuild(e){
+  const mx=mouse.x, my=mouse.y;
+  // Palette
+  if(mx<PAL_W){
+    let py=68;
+    for(const k of TKEYS){
+      if(my>=py&&my<py+50){selType=(selType===k?null:k);selRot=0;return;}
+      py+=56;
     }
-  }
-  // menu button
-  const mbx = W/2 - 60, mby = H/2 + 126;
-  if (mouse.x >= mbx && mouse.x <= mbx+120 && mouse.y >= mby && mouse.y <= mby+36) {
-    transitionTo('title');
-  }
-}
-
-function handleGameDown(e) {
-  const mx = mouse.x, my = mouse.y;
-
-  // place ghost
-  if (ghost) {
-    if (mx > PALETTE_W + 20) {
-      placed.push(new Obstacle(ghost.type, mx, my, {
-        w: ghost.w, h: ghost.h, r: ghost.r, rot: ghost.rot || 0
-      }));
-      shapesUsed++;
-      // decrement palette
-      for (const p of palette) {
-        if (p.type === ghost.type && p.w === ghost.w && p.h === ghost.h && p.r === ghost.r && p.remaining > 0) {
-          p.remaining--;
-          break;
-        }
-      }
-      ghost = null;
-    }
+    if(my>=H-65&&my<H-29){startTest();return;}
+    if(my>=H-108&&my<H-72){initGrid();return;}
     return;
   }
+  const g=toGrid(mx,my);
+  if(!inGrid(g.c,g.r)) return;
+  if(e.button===2){removeAt(g.c,g.r);return;}
+  if(selType&&!grid[g.r][g.c]) place(selType,g.c,g.r,selRot);
+  else if(grid[g.r][g.c]&&!selType) removeAt(g.c,g.r);
+}
 
-  // check palette click
-  if (mx < PALETTE_W) {
-    let py = 80;
-    for (const p of palette) {
-      if (p.remaining <= 0) { py += 72; continue; }
-      if (my >= py && my < py + 60) {
-        ghost = { type: p.type, w: p.w, h: p.h, r: p.r, rot: 0 };
-        selectedIdx = -1;
-        return;
-      }
-      py += 72;
-    }
-    // reset button
-    if (my > H - 52 && my < H - 12) {
-      loadLevel(levelIdx);
-      return;
-    }
-    // back button
-    if (my > H - 95 && my < H - 60) {
-      transitionTo('title');
-      return;
-    }
+function clickResult(){
+  const mx=mouse.x,my=mouse.y;
+  const bw=170,bh=44,bx=W/2-bw/2,by=H/2+80;
+  if(mx>=bx&&mx<=bx+bw&&my>=by&&my<=by+bh){
+    testing=false;wind=0;screen='build';
+    for(const p of activePcs()){p.hp=p.maxHp;p.flash=0;}
     return;
   }
+  const bx2=W/2-70,by2=H/2+136;
+  if(mx>=bx2&&mx<=bx2+140&&my>=by2&&my<=by2+36){
+    initGrid();testing=false;wind=0;screen='build';
+  }
+}
 
-  // select placed obstacle (right-click removes)
-  for (let i = placed.length - 1; i >= 0; i--) {
-    if (placed[i].containsPoint(mx, my)) {
-      if (e.button === 2) { removeShape(i); return; }
-      selectedIdx = i;
-      return;
+// ═══════════════════════════════════════════════════════════════
+//  DRAWING HELPERS
+// ═══════════════════════════════════════════════════════════════
+function wedgeV(hs,rot){
+  switch(rot%4){
+    case 0:return[[-hs,0],[hs,-hs],[hs,hs]];
+    case 1:return[[0,-hs],[hs,hs],[-hs,hs]];
+    case 2:return[[hs,0],[-hs,hs],[-hs,-hs]];
+    case 3:return[[0,hs],[-hs,-hs],[hs,-hs]];
+  }
+}
+function drawShape(type,x,y,sz,rot,fill,stk,lw){
+  cx.save();cx.translate(x,y);
+  cx.fillStyle=fill;cx.strokeStyle=stk;cx.lineWidth=lw||1.5;
+  const hs=sz;
+  switch(type){
+    case 'block':case'heavy':
+      cx.beginPath();cx.roundRect(-hs,-hs,hs*2,hs*2,3);cx.fill();cx.stroke();
+      if(type==='heavy'){cx.strokeStyle='rgba(255,255,255,0.13)';cx.lineWidth=1;
+        cx.beginPath();cx.roundRect(-hs+3,-hs+3,hs*2-6,hs*2-6,2);cx.stroke();}
+      break;
+    case 'wedge':
+      const v=wedgeV(hs,rot||0);
+      cx.beginPath();cx.moveTo(v[0][0],v[0][1]);cx.lineTo(v[1][0],v[1][1]);
+      cx.lineTo(v[2][0],v[2][1]);cx.closePath();cx.fill();cx.stroke();
+      break;
+    case 'wheel':
+      cx.beginPath();cx.arc(0,0,hs,0,TAU);cx.fill();cx.stroke();
+      cx.fillStyle='rgba(0,0,0,0.25)';cx.beginPath();cx.arc(0,0,hs*0.28,0,TAU);cx.fill();
+      cx.strokeStyle='rgba(0,0,0,0.18)';cx.lineWidth=1;
+      for(let a=0;a<4;a++){const an=a*Math.PI/2;
+        cx.beginPath();cx.moveTo(0,0);cx.lineTo(Math.cos(an)*hs*0.85,Math.sin(an)*hs*0.85);cx.stroke();}
+      break;
+  }
+  cx.restore();
+}
+
+function drawPiece(p){
+  const o=cellXY(p.c,p.r), hs=CELL/2-2, pr=T[p.type];
+  let fill=pr.col, stk=pr.stk;
+  if(testing){
+    const hp=clamp(p.hp/p.maxHp,0,1);
+    const r0=parseInt(pr.col.slice(1,3),16),g0=parseInt(pr.col.slice(3,5),16),b0=parseInt(pr.col.slice(5,7),16);
+    let rr=lerp(r0,255,1-hp),gg=lerp(g0,60,(1-hp)*0.8),bb=lerp(b0,30,1-hp);
+    if(p.flash>0.1){rr=Math.min(255,rr+70*p.flash);gg=Math.min(255,gg+40*p.flash);bb=Math.min(255,bb+40*p.flash);}
+    fill=`rgb(${rr|0},${gg|0},${bb|0})`;
+  }
+  drawShape(p.type,o.x,o.y,hs,p.rot,fill,stk,1.5);
+  if(testing){
+    const hp=clamp(p.hp/p.maxHp,0,1);
+    if(hp<0.98){
+      const bw=CELL*0.65,bh=3,bx=o.x-bw/2,by=o.y+hs+4;
+      cx.fillStyle='rgba(0,0,0,0.5)';cx.fillRect(bx,by,bw,bh);
+      cx.fillStyle=hp>0.5?'#44ee88':hp>0.2?'#eeaa22':'#ff3322';
+      cx.fillRect(bx,by,bw*hp,bh);
     }
   }
-  selectedIdx = -1;
 }
 
-function removeShape(idx) {
-  const obs = placed[idx];
-  // return to palette
-  for (const p of palette) {
-    if (p.type === obs.type && p.w === obs.w && p.h === obs.h) { p.remaining++; break; }
-    if (p.type === obs.type && p.type === 'circle') { p.remaining++; break; }
+function drawDebrisItem(d){
+  if(d.type==='spark'){
+    cx.globalAlpha=d.life;cx.fillStyle='#ffaa44';
+    cx.beginPath();cx.arc(d.x,d.y,2+d.life*2,0,TAU);cx.fill();
+    cx.globalAlpha=1;return;
   }
-  placed.splice(idx, 1);
-  shapesUsed = Math.max(0, shapesUsed - 1);
-  selectedIdx = -1;
+  cx.save();cx.globalAlpha=d.life*0.7;cx.translate(d.x,d.y);cx.rotate(d.a);
+  const pr=T[d.type];
+  drawShape(d.type,0,0,CELL*0.35,d.rot,pr.col,pr.stk,1);
+  cx.restore();cx.globalAlpha=1;
 }
 
-// ── SCREEN TRANSITIONS ─────────────────────────────────────────────
-function transitionTo(newScreen) {
-  fadingTo = newScreen;
-  fadeAlpha = 0;
+// ═══════════════════════════════════════════════════════════════
+//  DRAW BACKGROUND / GRID
+// ═══════════════════════════════════════════════════════════════
+function drawBG(){
+  const bg=cx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#060610');bg.addColorStop(1,'#0a0e1e');
+  cx.fillStyle=bg;cx.fillRect(0,0,W,H);
 }
-
-function updateTransition() {
-  if (!fadingTo) return;
-  fadeAlpha += 0.045;
-  if (fadeAlpha >= 1) {
-    screen    = fadingTo;
-    fadingTo  = null;
-    fadeAlpha = 1;
-  }
+function drawGrid(){
+  cx.strokeStyle='rgba(30,50,80,0.18)';cx.lineWidth=0.5;
+  for(let c=0;c<=COLS;c++){const x=gx0+c*CELL;cx.beginPath();cx.moveTo(x,gy0);cx.lineTo(x,gy0+ROWS*CELL);cx.stroke();}
+  for(let r=0;r<=ROWS;r++){const y=gy0+r*CELL;cx.beginPath();cx.moveTo(gx0,y);cx.lineTo(gx0+COLS*CELL,y);cx.stroke();}
+  const gy=gy0+ROWS*CELL;
+  cx.strokeStyle='#556688';cx.lineWidth=2.5;
+  cx.beginPath();cx.moveTo(gx0-10,gy);cx.lineTo(gx0+COLS*CELL+10,gy);cx.stroke();
+  cx.fillStyle='#445566';
+  for(let c=0;c<COLS;c++){cx.beginPath();cx.arc(gx0+c*CELL+CELL/2,gy+6,2.5,0,TAU);cx.fill();}
+  cx.fillStyle='#334455';cx.font='9px monospace';cx.textAlign='center';
+  cx.fillText('\u25BC ANCHORED TO GROUND \u25BC',gx0+COLS*CELL/2,gy+18);
 }
-
-// ── RENDERING: TITLE SCREEN ────────────────────────────────────────
-function drawTitle() {
-  // background particles
-  const obs = allObstacles();
-  for (const p of particles) { p.update([]); p.draw(); }
-
-  // overlay
-  ctx.fillStyle = 'rgba(6,6,15,0.55)';
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#d0eeff';
-  ctx.font = 'bold 52px monospace';
-  ctx.fillText('AEROFLOW', W/2, H/2 - 60);
-
-  ctx.fillStyle = '#5599bb';
-  ctx.font = '16px monospace';
-  ctx.fillText('Wind Tunnel Puzzle', W/2, H/2 - 28);
-
-  // level buttons
-  const cols = Math.min(LEVELS.length, 5);
-  const bw = 56, gap = 14;
-  const totalW = cols * bw + (cols-1) * gap;
-  const sx = W/2 - totalW/2;
-  const sy = H/2 + 40;
-  ctx.font = 'bold 13px monospace';
-  for (let i = 0; i < LEVELS.length; i++) {
-    const bx = sx + i * (bw + gap);
-    const hover = mouse.x >= bx && mouse.x <= bx+bw && mouse.y >= sy && mouse.y <= sy+bw;
-    ctx.fillStyle = hover ? 'rgba(0,170,255,0.25)' : 'rgba(20,40,70,0.7)';
-    ctx.strokeStyle = hover ? '#44bbff' : '#335577';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.roundRect(bx, sy, bw, bw, 6); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#cce8ff';
-    ctx.fillText(i + 1, bx + bw/2, sy + 24);
-    // stars
-    const s = bestStars[i];
-    ctx.fillStyle = '#ffcc00';
-    ctx.font = '12px monospace';
-    ctx.fillText('★'.repeat(s) + '☆'.repeat(3-s), bx + bw/2, sy + 44);
-    ctx.font = 'bold 13px monospace';
-  }
-
-  ctx.fillStyle = '#445566';
-  ctx.font = '12px monospace';
-  ctx.fillText('Click a level to play  •  R to rotate  •  Right-click to remove', W/2, H - 30);
-}
-
-// ── RENDERING: GAME SCREEN ─────────────────────────────────────────
-function drawGame() {
-  const obs = allObstacles();
-
-  // update & draw particles
-  for (const p of particles) { p.update(obs); p.draw(); }
-
-  // targets
-  for (const t of targets) { t.update(particles); t.draw(); }
-
-  // fixed obstacles
-  for (const o of fixedObs) o.draw(false);
-
-  // placed obstacles
-  for (let i = 0; i < placed.length; i++) placed[i].draw(i === selectedIdx);
-
-  // ghost
-  if (ghost && mouse.x > PALETTE_W) {
-    ctx.globalAlpha = 0.45;
-    const tmp = new Obstacle(ghost.type, mouse.x, mouse.y, ghost);
-    tmp.draw(true);
-    ctx.globalAlpha = 1;
-  }
-
-  // ── PALETTE PANEL ──
-  ctx.fillStyle = 'rgba(6,10,20,0.92)';
-  ctx.fillRect(0, 0, PALETTE_W, H);
-  ctx.strokeStyle = '#1a3050';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(PALETTE_W, 0); ctx.lineTo(PALETTE_W, H); ctx.stroke();
-
-  // level name
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#88bbdd';
-  ctx.font = 'bold 12px monospace';
-  ctx.fillText('LVL ' + (levelIdx + 1), PALETTE_W/2, 24);
-  ctx.fillStyle = '#5588aa';
-  ctx.font = '10px monospace';
-  ctx.fillText(LEVELS[levelIdx].name, PALETTE_W/2, 40);
-
-  // shapes
-  let py = 80;
-  for (let i = 0; i < palette.length; i++) {
-    const p = palette[i];
-    const hover = mouse.x < PALETTE_W && mouse.y >= py && mouse.y < py + 60;
-    ctx.fillStyle = hover && p.remaining > 0 ? 'rgba(0,140,255,0.15)' : 'rgba(15,25,45,0.6)';
-    ctx.strokeStyle = '#1a3050';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.roundRect(8, py, PALETTE_W - 16, 58, 5); ctx.fill(); ctx.stroke();
-
-    // shape preview
-    ctx.save();
-    ctx.translate(PALETTE_W/2, py + 26);
-    ctx.fillStyle = p.remaining > 0 ? 'rgba(40,80,130,0.9)' : 'rgba(25,35,50,0.5)';
-    ctx.strokeStyle = p.remaining > 0 ? '#4499cc' : '#223344';
-    ctx.lineWidth = 1.2;
-    if (p.type === 'rect') {
-      const pw = Math.min(p.w, 50) * 0.55, ph = Math.min(p.h, 30) * 0.8;
-      ctx.fillRect(-pw/2, -ph/2, pw, ph);
-      ctx.strokeRect(-pw/2, -ph/2, pw, ph);
-    } else {
-      const pr = Math.min(p.r, 20);
-      ctx.beginPath(); ctx.arc(0, 0, pr * 0.7, 0, TAU); ctx.fill(); ctx.stroke();
+function drawWindArrows(al){
+  cx.strokeStyle=`rgba(30,60,100,${al})`;cx.lineWidth=1;
+  for(let y=gy0+20;y<gy0+ROWS*CELL;y+=50)
+    for(let x=gx0+20;x<gx0+COLS*CELL;x+=70){
+      cx.beginPath();cx.moveTo(x,y);cx.lineTo(x+14,y);
+      cx.lineTo(x+10,y-3);cx.moveTo(x+14,y);cx.lineTo(x+10,y+3);cx.stroke();
     }
-    ctx.restore();
-
-    // count badge
-    ctx.fillStyle = p.remaining > 0 ? '#88ddff' : '#334455';
-    ctx.font = 'bold 10px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('×' + p.remaining, PALETTE_W/2, py + 52);
-    py += 72;
-  }
-
-  // reset button
-  const btnY = H - 52;
-  const rHover = mouse.x < PALETTE_W && mouse.y > btnY && mouse.y < btnY + 36;
-  ctx.fillStyle = rHover ? 'rgba(255,100,60,0.2)' : 'rgba(20,30,50,0.6)';
-  ctx.strokeStyle = '#664433';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.roundRect(8, btnY, PALETTE_W-16, 36, 5); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#cc8866';
-  ctx.font = '11px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('Reset', PALETTE_W/2, btnY + 22);
-
-  // back button
-  const bkY = H - 95;
-  const bkHover = mouse.x < PALETTE_W && mouse.y > bkY && mouse.y < bkY + 36;
-  ctx.fillStyle = bkHover ? 'rgba(120,140,180,0.2)' : 'rgba(20,30,50,0.6)';
-  ctx.strokeStyle = '#334466';
-  ctx.beginPath(); ctx.roundRect(8, bkY, PALETTE_W-16, 36, 5); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#7799bb';
-  ctx.fillText('Menu', PALETTE_W/2, bkY + 22);
-
-  // hint text
-  ctx.fillStyle = '#334455';
-  ctx.font = '9px monospace';
-  ctx.fillText('R: rotate', PALETTE_W/2, 60);
-
-  // check completion
-  if (targets.every(t => t.done)) {
-    const earned = calcStars();
-    bestStars[levelIdx] = Math.max(bestStars[levelIdx], earned);
-    setTimeout(() => { if (screen === 'game') transitionTo('complete'); }, 600);
-  }
 }
 
-// ── RENDERING: LEVEL COMPLETE ──────────────────────────────────────
-function drawComplete() {
-  // keep particles flowing for background
-  const obs = allObstacles();
-  for (const p of particles) { p.update(obs); p.draw(); }
-  for (const t of targets) t.draw();
-  for (const o of fixedObs) o.draw(false);
-  for (const o of placed) o.draw(false);
+// ═══════════════════════════════════════════════════════════════
+//  PALETTE
+// ═══════════════════════════════════════════════════════════════
+function drawPalette(){
+  cx.fillStyle='rgba(6,10,20,0.94)';cx.fillRect(0,0,PAL_W,H);
+  cx.strokeStyle='#1a2a44';cx.lineWidth=1;
+  cx.beginPath();cx.moveTo(PAL_W,0);cx.lineTo(PAL_W,H);cx.stroke();
 
-  // overlay
-  ctx.fillStyle = 'rgba(6,6,15,0.7)';
-  ctx.fillRect(0, 0, W, H);
+  cx.textAlign='center';cx.fillStyle='#88bbdd';cx.font='bold 12px monospace';
+  cx.fillText('PARTS',PAL_W/2,22);
+  cx.fillStyle='#445566';cx.font='9px monospace';
+  cx.fillText('R: rotate wedge',PAL_W/2,40);
+  cx.fillText('Space: test',PAL_W/2,52);
 
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#d0eeff';
-  ctx.font = 'bold 32px monospace';
-  ctx.fillText('Level Complete!', W/2, H/2 - 60);
+  let py=68;
+  for(const k of TKEYS){
+    const pr=T[k], hov=mouse.x<PAL_W&&mouse.y>=py&&mouse.y<py+50, sel=selType===k;
+    cx.fillStyle=sel?'rgba(0,150,255,0.18)':hov?'rgba(0,120,255,0.1)':'rgba(12,20,38,0.6)';
+    cx.strokeStyle=sel?'#44aaff':'#1a2a44';cx.lineWidth=sel?1.5:1;
+    cx.beginPath();cx.roundRect(8,py,PAL_W-16,48,5);cx.fill();cx.stroke();
+    drawShape(k,30,py+24,12,k==='wedge'?selRot:0,pr.col,pr.stk,1);
+    cx.fillStyle=sel?'#aaddff':'#7799bb';cx.font='bold 10px monospace';cx.textAlign='left';
+    cx.fillText(pr.name,50,py+20);
+    cx.fillStyle='#445566';cx.font='9px monospace';
+    cx.fillText(pr.desc,50,py+34);
+    cx.textAlign='center';
+    py+=56;
+  }
 
-  const stars = calcStars();
-  ctx.font = '36px monospace';
-  ctx.fillStyle = '#ffcc00';
-  ctx.fillText('★'.repeat(stars) + '☆'.repeat(3 - stars), W/2, H/2);
+  const ap=activePcs().length;
+  const tby=H-65;
+  const tH=mouse.x<PAL_W&&mouse.y>=tby&&mouse.y<tby+36;
+  cx.fillStyle=ap?(tH?'rgba(0,200,100,0.25)':'rgba(0,160,80,0.15)'):'rgba(30,40,50,0.3)';
+  cx.strokeStyle=ap?'#33bb77':'#333';cx.lineWidth=1.5;
+  cx.beginPath();cx.roundRect(8,tby,PAL_W-16,36,5);cx.fill();cx.stroke();
+  cx.fillStyle=ap?'#55eeaa':'#444';cx.font='bold 12px monospace';cx.textAlign='center';
+  cx.fillText('\u25B6 TEST',PAL_W/2,tby+22);
 
-  ctx.fillStyle = '#6699aa';
-  ctx.font = '13px monospace';
-  ctx.fillText(`Shapes used: ${shapesUsed}`, W/2, H/2 + 34);
+  const cby=H-108;
+  const cH=mouse.x<PAL_W&&mouse.y>=cby&&mouse.y<cby+36;
+  cx.fillStyle=cH?'rgba(255,80,50,0.15)':'rgba(25,30,45,0.5)';
+  cx.strokeStyle='#553322';cx.lineWidth=1;
+  cx.beginPath();cx.roundRect(8,cby,PAL_W-16,36,5);cx.fill();cx.stroke();
+  cx.fillStyle='#cc7755';cx.font='11px monospace';
+  cx.fillText('Clear All',PAL_W/2,cby+22);
 
-  // next / finish button
-  const label = levelIdx < LEVELS.length - 1 ? 'Next Level' : 'Back to Menu';
-  const btnW = 160, btnH = 44;
-  const bx = W/2 - btnW/2, by = H/2 + 70;
-  const hover = mouse.x >= bx && mouse.x <= bx+btnW && mouse.y >= by && mouse.y <= by+btnH;
-  ctx.fillStyle = hover ? 'rgba(0,170,255,0.25)' : 'rgba(20,50,80,0.7)';
-  ctx.strokeStyle = hover ? '#44bbff' : '#335577';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.roundRect(bx, by, btnW, btnH, 6); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#cce8ff';
-  ctx.font = 'bold 14px monospace';
-  ctx.fillText(label, W/2, by + 28);
-
-  // menu button
-  const mbx = W/2 - 60, mby = H/2 + 126;
-  const mHover = mouse.x >= mbx && mouse.x <= mbx+120 && mouse.y >= mby && mouse.y <= mby+36;
-  ctx.fillStyle = mHover ? 'rgba(120,140,180,0.2)' : 'rgba(20,30,50,0.5)';
-  ctx.strokeStyle = '#334466';
-  ctx.beginPath(); ctx.roundRect(mbx, mby, 120, 36, 5); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#7799bb';
-  ctx.font = '12px monospace';
-  ctx.fillText('Menu', W/2, mby + 22);
+  cx.fillStyle='#445566';cx.font='10px monospace';
+  cx.fillText(ap+' piece'+(ap!==1?'s':''),PAL_W/2,H-10);
 }
 
-// ── MAIN LOOP ──────────────────────────────────────────────────────
-function loop() {
-  ctx.clearRect(0, 0, W, H);
+// ═══════════════════════════════════════════════════════════════
+//  GHOST
+// ═══════════════════════════════════════════════════════════════
+function drawGhost(){
+  if(!selType||mouse.x<PAL_W) return;
+  const g=toGrid(mouse.x,mouse.y);
+  if(!inGrid(g.c,g.r)) return;
+  const o=cellXY(g.c,g.r), ok=!grid[g.r][g.c];
+  cx.globalAlpha=ok?0.45:0.15;
+  drawShape(selType,o.x,o.y,CELL/2-2,selRot,ok?T[selType].col:'#663333',ok?T[selType].stk:'#883333',2);
+  cx.globalAlpha=1;
+}
 
-  // dark gradient background
-  const bg = ctx.createLinearGradient(0, 0, 0, H);
-  bg.addColorStop(0, '#06060f');
-  bg.addColorStop(1, '#0a0f1e');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
+// ═══════════════════════════════════════════════════════════════
+//  WIND GAUGE
+// ═══════════════════════════════════════════════════════════════
+function drawGauge(){
+  const gw=28,gh=180,gx=W-50,gy=H/2-gh/2;
+  cx.fillStyle='rgba(10,15,30,0.8)';cx.strokeStyle='#223344';cx.lineWidth=1;
+  cx.beginPath();cx.roundRect(gx-4,gy-20,gw+8,gh+44,6);cx.fill();cx.stroke();
+  cx.fillStyle='#667788';cx.font='bold 9px monospace';cx.textAlign='center';
+  cx.fillText('WIND',gx+gw/2,gy-6);
+  cx.fillStyle='#0a1020';cx.fillRect(gx,gy,gw,gh);
+  const frac=clamp(wind/MAX_WIND,0,1), fh=gh*frac;
+  const gr=cx.createLinearGradient(0,gy+gh,0,gy);
+  gr.addColorStop(0,'#22aa55');gr.addColorStop(0.4,'#aaaa22');gr.addColorStop(0.7,'#ee6622');gr.addColorStop(1,'#ff2222');
+  cx.fillStyle=gr;cx.fillRect(gx,gy+gh-fh,gw,fh);
+  cx.strokeStyle='#334455';cx.lineWidth=1;cx.strokeRect(gx,gy,gw,gh);
+  cx.fillStyle='#aabbcc';cx.font='bold 10px monospace';
+  cx.fillText(wind.toFixed(1),gx+gw/2,gy+gh+16);
+  cx.fillStyle='#556677';cx.font='8px monospace';
+  cx.fillText('m/s',gx+gw/2,gy+gh+27);
+}
 
-  // faint grid
-  ctx.strokeStyle = 'rgba(30,50,80,0.12)';
-  ctx.lineWidth = 0.5;
-  const gs = 40;
-  for (let x = PALETTE_W; x < W; x += gs) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-  }
-  for (let y = 0; y < H; y += gs) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-  }
+function drawTestHUD(){
+  cx.textAlign='center';
+  cx.fillStyle='#ddeeff';cx.font='bold 22px monospace';
+  cx.fillText(testTime.toFixed(1)+'s',W/2,36);
+  cx.fillStyle='#7799aa';cx.font='13px monospace';
+  cx.fillText('Pieces: '+activePcs().length+'/'+startCount,W/2,58);
+}
 
-  // wind arrows (subtle)
-  ctx.strokeStyle = 'rgba(30,60,100,0.18)';
-  ctx.lineWidth = 1;
-  for (let y = 30; y < H; y += 60) {
-    for (let x = PALETTE_W + 30; x < W - 30; x += 80) {
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + 16, y);
-      ctx.lineTo(x + 12, y - 3);
-      ctx.moveTo(x + 16, y);
-      ctx.lineTo(x + 12, y + 3);
-      ctx.stroke();
+// ═══════════════════════════════════════════════════════════════
+//  SCREENS
+// ═══════════════════════════════════════════════════════════════
+function drawTitle(){
+  if(!particles.length) for(let i=0;i<PARTICLE_N;i++) particles.push(new Particle());
+  for(const p of particles){p.update([]);p.draw();}
+  cx.fillStyle='rgba(6,6,15,0.55)';cx.fillRect(0,0,W,H);
+  cx.textAlign='center';
+  cx.fillStyle='#d0eeff';cx.font='bold 50px monospace';
+  cx.fillText('AEROFLOW',W/2,H/2-55);
+  cx.fillStyle='#5599bb';cx.font='15px monospace';
+  cx.fillText('Wind Tunnel Challenge',W/2,H/2-22);
+  cx.fillStyle='#778899';cx.font='13px monospace';
+  cx.fillText('Build a structure. Survive the wind.',W/2,H/2+14);
+  const bw=160,bh=48,bx=W/2-bw/2,by=H/2+45;
+  const hov=mouse.x>=bx&&mouse.x<=bx+bw&&mouse.y>=by&&mouse.y<=by+bh;
+  cx.fillStyle=hov?'rgba(0,170,255,0.25)':'rgba(20,40,70,0.7)';
+  cx.strokeStyle=hov?'#44bbff':'#335577';cx.lineWidth=1.5;
+  cx.beginPath();cx.roundRect(bx,by,bw,bh,6);cx.fill();cx.stroke();
+  cx.fillStyle='#cce8ff';cx.font='bold 15px monospace';
+  cx.fillText('BUILD',W/2,by+30);
+  if(bestTime>0){cx.fillStyle='#445566';cx.font='11px monospace';cx.fillText('Best: '+bestTime.toFixed(1)+'s',W/2,H/2+120);}
+  cx.fillStyle='#334455';cx.font='11px monospace';
+  cx.fillText('Click to start',W/2,H-30);
+}
+
+function drawBuild(){
+  drawGrid();
+  drawWindArrows(0.12);
+  for(const p of activePcs()) drawPiece(p);
+  drawGhost();
+  drawPalette();
+  // Highlight disconnected pieces
+  const vis=connMap();
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    if(grid[r][c]&&!vis[r][c]){
+      const o=cellXY(c,r);
+      cx.strokeStyle='rgba(255,100,50,0.5)';cx.lineWidth=2;cx.setLineDash([4,3]);
+      cx.strokeRect(o.x-CELL/2+1,o.y-CELL/2+1,CELL-2,CELL-2);
+      cx.setLineDash([]);
     }
   }
+}
 
-  // draw current screen
-  if (screen === 'title')    drawTitle();
-  if (screen === 'game')     drawGame();
-  if (screen === 'complete') drawComplete();
+function drawTestScene(){
+  drawGrid();
+  const obs=activePcs();
+  for(const p of particles) p.draw();
+  for(const p of obs) drawPiece(p);
+  for(const d of debris) drawDebrisItem(d);
+  drawGauge();
+  drawTestHUD();
+  drawWindArrows(0.06+wind/MAX_WIND*0.15);
+}
 
-  // transition overlay
-  if (fadingTo) {
-    updateTransition();
-    ctx.fillStyle = `rgba(6,6,15,${1 - Math.abs(fadeAlpha * 2 - 1)})`;
-    ctx.fillRect(0, 0, W, H);
-  }
+function drawResult(){
+  drawTestScene();
+  cx.fillStyle='rgba(6,6,15,0.65)';cx.fillRect(0,0,W,H);
+  cx.textAlign='center';
+  cx.fillStyle='#d0eeff';cx.font='bold 30px monospace';
+  cx.fillText('Test Complete',W/2,H/2-70);
+  cx.fillStyle='#88bbdd';cx.font='16px monospace';
+  cx.fillText('Survived: '+survived.toFixed(1)+'s / '+MAX_TIME+'s',W/2,H/2-30);
+  cx.fillStyle='#7799aa';cx.font='14px monospace';
+  cx.fillText('Pieces remaining: '+piecesLeft+'/'+startCount,W/2,H/2);
+  const stars=survived>=MAX_TIME?3:survived>=MAX_TIME*0.65?2:survived>=MAX_TIME*0.3?1:0;
+  cx.font='32px monospace';cx.fillStyle='#ffcc00';
+  cx.fillText('\u2605'.repeat(stars)+'\u2606'.repeat(3-stars),W/2,H/2+42);
+  // Buttons
+  const bw=170,bh=44,bx=W/2-bw/2,by=H/2+80;
+  const h1=mouse.x>=bx&&mouse.x<=bx+bw&&mouse.y>=by&&mouse.y<=by+bh;
+  cx.fillStyle=h1?'rgba(0,170,255,0.25)':'rgba(20,50,80,0.7)';
+  cx.strokeStyle=h1?'#44bbff':'#335577';cx.lineWidth=1.5;
+  cx.beginPath();cx.roundRect(bx,by,bw,bh,6);cx.fill();cx.stroke();
+  cx.fillStyle='#cce8ff';cx.font='bold 13px monospace';
+  cx.fillText('Rebuild & Retry',W/2,by+28);
+  const bx2=W/2-70,by2=H/2+136;
+  const h2=mouse.x>=bx2&&mouse.x<=bx2+140&&mouse.y>=by2&&mouse.y<=by2+36;
+  cx.fillStyle=h2?'rgba(120,140,180,0.2)':'rgba(20,30,50,0.5)';
+  cx.strokeStyle='#334466';cx.lineWidth=1;
+  cx.beginPath();cx.roundRect(bx2,by2,140,36,5);cx.fill();cx.stroke();
+  cx.fillStyle='#7799bb';cx.font='12px monospace';
+  cx.fillText('Start Fresh',W/2,by2+22);
+}
 
+// ═══════════════════════════════════════════════════════════════
+//  MAIN LOOP
+// ═══════════════════════════════════════════════════════════════
+function loop(){
+  cx.clearRect(0,0,W,H);
+  drawBG();
+  if(screen==='title') drawTitle();
+  if(screen==='build') drawBuild();
+  if(screen==='test'){updateTest();drawTestScene();}
+  if(screen==='result') drawResult();
+  if(fadeTo){updateFade();cx.fillStyle=`rgba(6,6,15,${1-Math.abs(fade*2-1)})`;cx.fillRect(0,0,W,H);}
   requestAnimationFrame(loop);
 }
 
-// ── INIT ───────────────────────────────────────────────────────────
-for (let i = 0; i < PARTICLE_COUNT; i++) particles.push(new Particle());
+// ═══════════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════════
+for(let i=0;i<PARTICLE_N;i++) particles.push(new Particle());
 loop();
 </script>
 </body>

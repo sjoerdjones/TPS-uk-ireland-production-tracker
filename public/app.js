@@ -119,6 +119,10 @@ function createCard(p) {
           <div class="field-label">Personnel</div>
           <div class="field-value personnel">${escapeHtml(p.personnel || 'Key personnel details not yet announced')}</div>
         </div>
+        ${p.background ? `<div class="field" style="grid-column: 1 / -1;">
+          <div class="field-label">Background</div>
+          <div class="field-value background">${escapeHtml(p.background)}</div>
+        </div>` : ''}
         <div class="field">
           <div class="field-label">SourceURL</div>
           <div class="field-value">${sourceUrlDisplay}</div>

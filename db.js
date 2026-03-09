@@ -36,6 +36,7 @@ function createSchema() {
       publication_date TEXT,
       studio TEXT,
       personnel TEXT,
+      background TEXT,
       source_title TEXT,
       source_url TEXT,
       status TEXT DEFAULT 'new',
@@ -113,12 +114,12 @@ function insertProduction(prod) {
   if (existing) return null;
 
   return db.prepare(`
-    INSERT INTO productions (title, type, genre, synopsis, release_year, publication_date, studio, personnel, source_title, source_url)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO productions (title, type, genre, synopsis, release_year, publication_date, studio, personnel, background, source_title, source_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     prod.title, prod.type, prod.genre, prod.synopsis,
     prod.release_year, prod.publication_date, prod.studio,
-    prod.personnel, prod.source_title, prod.source_url
+    prod.personnel, prod.background || null, prod.source_title, prod.source_url
   );
 }
 
