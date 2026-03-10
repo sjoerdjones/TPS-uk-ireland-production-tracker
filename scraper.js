@@ -85,6 +85,7 @@ const INDUSTRY_SITES = [
   { name: 'Screen Ireland - Funding Decisions', url: 'https://www.screenireland.ie/funding/funding-decisions' },
   { name: 'BFC Filmography', url: 'https://britishfilmcommission.org.uk/filmography/' },
   { name: 'Screen Ireland - News', url: 'https://www.screenireland.ie/news' },
+  { name: 'Movie Insider', url: 'https://www.movieinsider.com/production-listings' },
 ];
 
 // TMDB genre ID mapping
@@ -233,12 +234,12 @@ async function searchForNewProductions() {
     }
   }
 
-  // 6. Industry site scraping - DISABLED temporarily due to poor data quality
-  /*
+  // 6. Industry site scraping - Movie Insider only (others still disabled due to quality issues)
   try {
-    const industryResults = await scrapeIndustrySites();
-    sourcesChecked += INDUSTRY_SITES.length;
-    for (let production of industryResults) {
+    // Only scrape Movie Insider
+    const miProductions = await scrapeMovieInsider();
+    sourcesChecked++;
+    for (let production of miProductions) {
       // Enrich with OMDb if enabled
       if (OMDB_API_KEY) {
         try {
@@ -253,13 +254,12 @@ async function searchForNewProductions() {
       if (result) {
         newCount++;
         newTitles.push(production.title);
-        console.log(`[Scraper] NEW (Industry): ${production.title}`);
+        console.log(`[Scraper] NEW (Movie Insider): ${production.title}`);
       }
     }
   } catch (err) {
-    console.warn(`[Scraper] Industry scraping failed: ${err.message}`);
+    console.warn(`[Scraper] Movie Insider scraping failed: ${err.message}`);
   }
-  */
 
   const results = {
     timestamp: new Date().toISOString(),
@@ -748,6 +748,15 @@ async function scrapeIndustrySites() {
     console.log(`[Scraper/Industry] Screen Ireland News: ${siNews.length} productions found`);
   } catch (err) {
     console.warn(`[Scraper/Industry] Screen Ireland News scraping failed: ${err.message}`);
+  }
+
+  // 4. Movie Insider Production Listings
+  try {
+    const miProductions = await scrapeMovieInsider();
+    productions.push(...miProductions);
+    console.log(`[Scraper/Industry] Movie Insider: ${miProductions.length} productions found`);
+  } catch (err) {
+    console.warn(`[Scraper/Industry] Movie Insider scraping failed: ${err.message}`);
   }
 
   console.log(`[Scraper/Industry] Total from industry sites: ${productions.length}`);
@@ -1347,6 +1356,76 @@ function fetchUrl(url) {
     req.on('error', reject);
     req.on('timeout', () => { req.destroy(); reject(new Error(`Timeout fetching ${url}`)); });
   });
+}
+
+async function scrapeMovieInsider() {
+  const html = await fetchUrl('https://www.movieinsider.com/production-listings');
+  const $ = cheerio.load(html);
+  const productions = [];
+
+  // Movie Insider lists productions in structured format
+  // Look for production entries/cards
+  $('.movie, .production, article, .listing-item, [class*="film"]').each((_, el) => {
+    const title = $(el).find('h2, h3, h4, .title, .movie-title, a.title').first().text().trim();
+    const description = $(el).find('p, .description, .synopsis, .plot').first().text().trim();
+    const link = $(el).find('a').first().attr('href') || '';
+    const fullText = $(el).text();
+
+    if (title && title.length > 2 && title.length < 150) {
+      // Check for UK/Ireland relevance
+      const isRelevant = UK_IRELAND_KEYWORDS.some(kw => fullText.toLowerCase().includes(kw));
+      
+      if (isRelevant) {
+        let type = 'Movie';
+        if (/\b(series|season|tv|television)\b/i.test(fullText)) {
+          type = 'TV Series';
+        }
+
+        productions.push({
+          title,
+          type,
+          genre: extractGenre(fullText) || 'Not specified',
+          synopsis: description.substring(0, 300) || 'UK/Ireland production listed on Movie Insider',
+          release_year: extractYear(fullText) || 'TBD',
+          publication_date: new Date().toISOString().split('T')[0],
+          studio: extractStudio(fullText) || 'See Movie Insider for details',
+          personnel: extractPersonnel(fullText) || 'Personnel details on Movie Insider',
+          source_title: `Movie Insider: ${title}`,
+          source_url: link.startsWith('http') ? link : `https://www.movieinsider.com${link}`,
+        });
+      }
+    }
+  });
+
+  // Also try simpler selectors for links
+  $('a[href*="/m/"]').each((_, el) => {
+    const title = $(el).text().trim();
+    const href = $(el).attr('href') || '';
+    const context = $(el).parent().text();
+    
+    if (title.length > 2 && title.length < 100 && !productions.find(p => p.title === title)) {
+      // Check for UK/Ireland relevance in surrounding context
+      const isRelevant = UK_IRELAND_KEYWORDS.some(kw => context.toLowerCase().includes(kw));
+      
+      if (isRelevant) {
+        productions.push({
+          title,
+          type: 'Movie',
+          genre: 'Not specified',
+          synopsis: 'UK/Ireland production listed on Movie Insider',
+          release_year: extractYear(context) || 'TBD',
+          publication_date: new Date().toISOString().split('T')[0],
+          studio: extractStudio(context) || 'See Movie Insider for details',
+          personnel: extractPersonnel(context) || 'Personnel details on Movie Insider',
+          source_title: `Movie Insider: ${title}`,
+          source_url: href.startsWith('http') ? href : `https://www.movieinsider.com${href}`,
+        });
+      }
+    }
+  });
+
+  console.log(`[Scraper/MovieInsider] Found ${productions.length} UK/Ireland productions`);
+  return productions;
 }
 
 module.exports = { searchForNewProductions };
