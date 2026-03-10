@@ -1148,14 +1148,28 @@ async function fetchArticleContent(url) {
     for (const selector of contentSelectors) {
       const el = $(selector);
       if (el.length) {
-        content = el.text().trim();
+        // Preserve structured formatting by getting HTML and converting intelligently
+        const htmlContent = el.html();
+        // Replace <br>, <p>, and list items with newlines to preserve structure
+        const structuredContent = htmlContent
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<\/p>/gi, '\n\n')
+          .replace(/<li>/gi, '\n- ')
+          .replace(/<\/li>/gi, '')
+          .replace(/<[^>]+>/g, ' ')  // Remove remaining HTML tags
+          .replace(/&nbsp;/g, ' ')
+          .replace(/\s+/g, ' ')  // Normalize spaces
+          .replace(/\n\s+/g, '\n')  // Clean up line breaks
+          .trim();
+        
+        content = structuredContent;
         if (content.length > 500) break; // Found substantial content
       }
     }
     
     // If still no content, get all paragraph text
     if (content.length < 500) {
-      content = $('p').map((_, el) => $(el).text().trim()).get().join(' ');
+      content = $('p').map((_, el) => $(el).text().trim()).get().join('\n\n');
     }
     
     console.log(`[Scraper/Fetch] Fetched ${content.length} characters from article`);
@@ -1166,10 +1180,10 @@ async function fetchArticleContent(url) {
 }
 
 async function extractMultipleProductionsWithAI(fullContent, article) {
-  // Truncate content if too long (keep first ~8000 chars)
-  const content = fullContent.substring(0, 8000);
+  // Truncate content if too long (keep first ~12000 chars for better coverage)
+  const content = fullContent.substring(0, 12000);
   
-  const prompt = `You are a film/TV industry analyst. This article lists MULTIPLE UK/Ireland productions. Extract ALL of them.
+  const prompt = `You are a film/TV industry analyst. This article lists MULTIPLE UK/Ireland productions. Extract ALL of them with COMPLETE details.
 
 Article Title: ${article.title}
 Article Content: ${content}
@@ -1177,21 +1191,26 @@ Source: ${article.source}
 Published: ${article.pubDate}
 
 Extract ALL UK/Ireland productions mentioned in this article. Return a JSON array where each item has:
-- title: The production/film/series name
+- title: The production/film/series name (e.g., "Supacell (series two)")
 - type: "Movie" or "TV Series"
 - genre: Primary genre(s)
 - synopsis: 1-2 sentence plot/premise summary
 - release_year: Expected release year or "TBD"
-- studio: Production companies/studios involved
-- personnel: Key personnel (directors, writers, cast, producers)
+- studio: Production companies/studios involved (look for labels like "Prod:", "Production:", "Studio:", "Distributor:")
+- personnel: Key personnel including directors, writers, cast, producers, series creators (look for labels like "Cast:", "Dir:", "Director:", "Writer:", "Series creator:", "Starring:")
 - background: 1-2 sentences about the production company's notable work OR key talent's credits
 
-IMPORTANT: Include EVERY production mentioned, not just the first few. Return as a JSON array.
+IMPORTANT INSTRUCTIONS:
+1. Include EVERY production mentioned, not just the first few
+2. Extract ALL available details - do NOT leave fields empty if information is present
+3. Look for structured data markers like "Prod:", "Cast:", "Where:", "When:", "Distributor:", "Series creator:"
+4. If a field has multiple items (e.g., multiple cast members, multiple production companies), include ALL of them
+5. Be thorough - prioritize completeness over brevity
 
 Return ONLY valid JSON array, no markdown.`;
 
   try {
-    const response = await callOpenAI(prompt, 4000); // Increased token limit
+    const response = await callOpenAI(prompt, 8000); // Increased token limit to 8000 for detailed extraction
     
     // Try to parse JSON array
     let jsonMatch = response.match(/\[\s*\{[\s\S]*\}\s*\]/);
