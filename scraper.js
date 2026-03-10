@@ -145,30 +145,51 @@ async function searchForNewProductions() {
   // 3. Extract structured data from RSS and insert
   for (const article of relevant) {
     try {
-      let production;
+      // Check if this is a roundup article (multiple productions in one article)
+      const isRoundup = /\blatest updates\b|\bproductions shooting\b|\broundup\b/i.test(article.title);
+      
+      let productions = [];
 
-      if (OPENAI_API_KEY) {
-        production = await extractWithAI(article);
+      if (OPENAI_API_KEY && isRoundup) {
+        // For roundup articles, fetch full content and extract multiple productions
+        console.log(`[Scraper] Detected roundup article: ${article.title}`);
+        try {
+          const fullContent = await fetchArticleContent(article.link);
+          productions = await extractMultipleProductionsWithAI(fullContent, article);
+          console.log(`[Scraper] Extracted ${productions.length} productions from roundup article`);
+        } catch (err) {
+          console.warn(`[Scraper] Failed to fetch full article content: ${err.message}`);
+          // Fall back to single extraction from RSS
+          const single = await extractWithAI(article);
+          if (single) productions = [single];
+        }
+      } else if (OPENAI_API_KEY) {
+        const single = await extractWithAI(article);
+        if (single) productions = [single];
       } else {
-        production = extractFromArticle(article);
+        const single = extractFromArticle(article);
+        if (single) productions = [single];
       }
 
-      if (production && production.title) {
-        // Enrich with OMDb if enabled
-        if (OMDB_API_KEY) {
-          try {
-            const enriched = await enrichWithOMDB(production);
-            if (enriched) production = enriched;
-          } catch (err) {
-            console.warn(`[Scraper/OMDb] Failed to enrich "${production.title}": ${err.message}`);
+      // Process each extracted production
+      for (const production of productions) {
+        if (production && production.title) {
+          // Enrich with OMDb if enabled
+          if (OMDB_API_KEY) {
+            try {
+              const enriched = await enrichWithOMDB(production);
+              if (enriched) production = enriched;
+            } catch (err) {
+              console.warn(`[Scraper/OMDb] Failed to enrich "${production.title}": ${err.message}`);
+            }
           }
-        }
 
-        const result = insertProduction(production);
-        if (result) {
-          newCount++;
-          newTitles.push(production.title);
-          console.log(`[Scraper] NEW (RSS): ${production.title}`);
+          const result = insertProduction(production);
+          if (result) {
+            newCount++;
+            newTitles.push(production.title);
+            console.log(`[Scraper] NEW (RSS): ${production.title}`);
+          }
         }
       }
     } catch (err) {
@@ -1093,6 +1114,115 @@ function stripHtml(str) {
   return cheerio.load(str).text().trim();
 }
 
+// --- Full Article Content Fetching ---
+
+async function fetchArticleContent(url) {
+  try {
+    const html = await fetchUrl(url);
+    const $ = cheerio.load(html);
+    
+    // Remove unwanted elements
+    $('script, style, nav, header, footer, .ad, .advertisement, .social-share').remove();
+    
+    // Try common article content selectors
+    const contentSelectors = [
+      'article',
+      '.article-content',
+      '.article-body', 
+      '.entry-content',
+      '.post-content',
+      'main',
+      '[role="main"]',
+    ];
+    
+    let content = '';
+    for (const selector of contentSelectors) {
+      const el = $(selector);
+      if (el.length) {
+        content = el.text().trim();
+        if (content.length > 500) break; // Found substantial content
+      }
+    }
+    
+    // If still no content, get all paragraph text
+    if (content.length < 500) {
+      content = $('p').map((_, el) => $(el).text().trim()).get().join(' ');
+    }
+    
+    console.log(`[Scraper/Fetch] Fetched ${content.length} characters from article`);
+    return content;
+  } catch (err) {
+    throw new Error(`Failed to fetch article: ${err.message}`);
+  }
+}
+
+async function extractMultipleProductionsWithAI(fullContent, article) {
+  // Truncate content if too long (keep first ~8000 chars)
+  const content = fullContent.substring(0, 8000);
+  
+  const prompt = `You are a film/TV industry analyst. This article lists MULTIPLE UK/Ireland productions. Extract ALL of them.
+
+Article Title: ${article.title}
+Article Content: ${content}
+Source: ${article.source}
+Published: ${article.pubDate}
+
+Extract ALL UK/Ireland productions mentioned in this article. Return a JSON array where each item has:
+- title: The production/film/series name
+- type: "Movie" or "TV Series"
+- genre: Primary genre(s)
+- synopsis: 1-2 sentence plot/premise summary
+- release_year: Expected release year or "TBD"
+- studio: Production companies/studios involved
+- personnel: Key personnel (directors, writers, cast, producers)
+- background: 1-2 sentences about the production company's notable work OR key talent's credits
+
+IMPORTANT: Include EVERY production mentioned, not just the first few. Return as a JSON array.
+
+Return ONLY valid JSON array, no markdown.`;
+
+  try {
+    const response = await callOpenAI(prompt, 4000); // Increased token limit
+    
+    // Try to parse JSON array
+    let jsonMatch = response.match(/\[\s*\{[\s\S]*\}\s*\]/);
+    if (!jsonMatch) {
+      // Try extracting from markdown code blocks
+      const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        jsonMatch = codeBlockMatch[1].match(/\[\s*\{[\s\S]*\}\s*\]/);
+      }
+    }
+    
+    if (!jsonMatch) {
+      console.warn('[Scraper/AI] No JSON array found in multi-production extraction');
+      return [];
+    }
+    
+    const productions = JSON.parse(jsonMatch[0]);
+    
+    // Add common fields to all productions
+    return productions.map(p => ({
+      title: p.title,
+      type: p.type || 'Movie',
+      genre: p.genre || 'Not specified',
+      synopsis: p.synopsis || '',
+      release_year: p.release_year || 'TBD',
+      publication_date: article.pubDate
+        ? new Date(article.pubDate).toISOString().split('T')[0]
+        : new Date().toISOString().split('T')[0],
+      studio: p.studio || 'Studio not specified',
+      personnel: p.personnel || 'Personnel details not yet announced',
+      background: p.background || null,
+      source_title: article.title,
+      source_url: typeof article.link === 'string' ? article.link : '',
+    }));
+  } catch (err) {
+    console.warn(`[Scraper/AI] Multi-production extraction failed: ${err.message}`);
+    return [];
+  }
+}
+
 // --- AI-Powered Extraction (Optional, requires OPENAI_API_KEY) ---
 
 async function extractWithAI(article) {
@@ -1140,13 +1270,13 @@ Return ONLY valid JSON, no markdown.`;
   }
 }
 
-function callOpenAI(prompt) {
+function callOpenAI(prompt, maxTokens = 500) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
-      max_tokens: 500,
+      max_tokens: maxTokens,
     });
 
     const options = {
