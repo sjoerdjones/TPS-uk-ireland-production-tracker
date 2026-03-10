@@ -50,6 +50,7 @@ const RSS_FEEDS = [
   { name: 'Google Alerts - UK/IE',  url: 'https://www.google.nl/alerts/feeds/02410166039308921775/590286846440630370' },
   { name: 'Google Alerts - UK/IE 2', url: 'https://www.google.nl/alerts/feeds/02410166039308921775/2641158984982489582' },
   { name: 'Google Alerts - UK/IE 3', url: 'https://www.google.nl/alerts/feeds/02410166039308921775/11756065659132789461' },
+  { name: 'The People\'s Movies',    url: 'https://thepeoplesmovies.com/feed/' },
 ];
 
 // Keywords that indicate UK/Ireland relevance
