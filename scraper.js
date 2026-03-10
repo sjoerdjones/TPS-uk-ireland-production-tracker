@@ -1158,8 +1158,15 @@ async function fetchArticleContent(url) {
           .replace(/<\/li>/gi, '')
           .replace(/<[^>]+>/g, ' ')  // Remove remaining HTML tags
           .replace(/&nbsp;/g, ' ')
-          .replace(/\s+/g, ' ')  // Normalize spaces
-          .replace(/\n\s+/g, '\n')  // Clean up line breaks
+          .replace(/&amp;/g, '&')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'")
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/ +/g, ' ')  // Normalize multiple spaces to single space (but NOT newlines)
+          .replace(/\n +/g, '\n')  // Clean up spaces after line breaks
+          .replace(/ \n/g, '\n')  // Clean up spaces before line breaks
+          .replace(/\n{3,}/g, '\n\n')  // Limit to max 2 consecutive newlines
           .trim();
         
         content = structuredContent;
