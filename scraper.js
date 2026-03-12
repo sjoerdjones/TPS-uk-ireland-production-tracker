@@ -71,13 +71,17 @@ const UK_IRELAND_KEYWORDS = [
 const PRODUCTION_KEYWORDS = [
   'greenlit', 'greenlight', 'green-lit',
   'filming', 'shoots', 'shooting', 'production underway', 'begins production',
-  'starts filming', 'wraps filming', 'principal photography',
+  'starts filming', 'wraps filming', 'principal photography', 'wraps',
   'cast', 'casting', 'joins cast', 'set to star', 'attached to',
-  'director attached', 'to direct',
-  'renewed', 'ordered', 'picked up', 'commission',
+  'director attached', 'to direct', 'boards', 'set to direct',
+  'renewed', 'ordered', 'picked up', 'commission', 'commissioned',
   'adaptation', 'reboot', 'sequel', 'prequel', 'spin-off',
   'new series', 'new film', 'new movie',
   'funding', 'backed by', 'investment',
+  'production', 'in production', 'pre-production', 'post-production',
+  'announcement', 'announced', 'sets', 'in development', 'development',
+  'produces', 'producer', 'director', 'starring', 'stars',
+  'latest updates', 'roundup', 'update',
 ];
 
 // Industry sites to scrape for production listings
@@ -138,10 +142,22 @@ async function searchForNewProductions() {
     const text = `${article.title} ${article.description}`.toLowerCase();
     const hasUkIreland = UK_IRELAND_KEYWORDS.some(kw => text.includes(kw));
     const hasProduction = PRODUCTION_KEYWORDS.some(kw => text.includes(kw));
-    return hasUkIreland && hasProduction;
+    const isRelevant = hasUkIreland && hasProduction;
+    
+    // Debug logging: show why articles are filtered out
+    if (!isRelevant && (hasUkIreland || hasProduction)) {
+      if (hasUkIreland && !hasProduction) {
+        console.log(`[Scraper/Debug] Filtered out (UK/IE but no production keywords): ${article.title.substring(0, 80)}`);
+      } else if (hasProduction && !hasUkIreland) {
+        console.log(`[Scraper/Debug] Filtered out (production keywords but no UK/IE): ${article.title.substring(0, 80)}`);
+      }
+    }
+    
+    return isRelevant;
   });
 
   console.log(`[Scraper] Found ${relevant.length} UK/Ireland production articles`);
+  console.log(`[Scraper] Filtered out: ${allArticles.length - relevant.length} articles (${allArticles.length - relevant.length} didn't match both UK/IE + production criteria)`);
 
   // 3. Extract structured data from RSS and insert
   for (const article of relevant) {
