@@ -10,6 +10,11 @@ const { searchForNewProductions } = require('./scraper');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust proxy - required for Render (behind reverse proxy)
+if (process.env.RENDER) {
+  app.set('trust proxy', 1);
+}
+
 // Middleware
 app.use(express.json());
 

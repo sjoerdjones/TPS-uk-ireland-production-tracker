@@ -118,18 +118,38 @@ function updateStatus(id, status) {
 }
 
 function insertProduction(prod) {
+  // Validate required fields
+  if (!prod || !prod.title || !prod.type) {
+    console.warn('[Database] Skipping production with missing title or type:', prod);
+    return null;
+  }
+  
   // Check for duplicate by title
   const existing = db.prepare('SELECT id FROM productions WHERE title = ?').get(prod.title);
   if (existing) return null;
 
-  return db.prepare(`
-    INSERT INTO productions (title, type, genre, synopsis, release_year, publication_date, studio, personnel, background, source_title, source_url)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    prod.title, prod.type, prod.genre, prod.synopsis,
-    prod.release_year, prod.publication_date, prod.studio,
-    prod.personnel, prod.background || null, prod.source_title, prod.source_url
-  );
+  try {
+    return db.prepare(`
+      INSERT INTO productions (title, type, genre, synopsis, release_year, publication_date, studio, personnel, background, source_title, source_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      prod.title || 'Unknown',
+      prod.type || 'Movie',
+      prod.genre || null,
+      prod.synopsis || null,
+      prod.release_year || null,
+      prod.publication_date || null,
+      prod.studio || null,
+      prod.personnel || null,
+      prod.background || null,
+      prod.source_title || null,
+      prod.source_url || null
+    );
+  } catch (err) {
+    console.error(`[Database] Failed to insert production "${prod.title}": ${err.message}`);
+    console.error('[Database] Production data:', JSON.stringify(prod, null, 2));
+    return null;
+  }
 }
 
 module.exports = { getDb, getAllProductions, updateStatus, insertProduction };
