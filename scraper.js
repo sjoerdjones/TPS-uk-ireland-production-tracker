@@ -104,8 +104,9 @@ const TMDB_GENRE_MAP = {
 
 // --- Main Search Function ---
 
-async function searchForNewProductions() {
+async function searchForNewProductions(lookbackDays = 2) {
   console.log(`[Scraper] Starting search at ${new Date().toISOString()}`);
+  console.log(`[Scraper] Looking back ${lookbackDays} days for articles`);
   console.log(`[Scraper] AI extraction: ${OPENAI_API_KEY ? 'ENABLED' : 'DISABLED (set OPENAI_API_KEY for better results)'}`);
   console.log(`[Scraper] Gemini web search: ${GEMINI_API_KEY ? 'ENABLED' : 'DISABLED (set GEMINI_API_KEY for Google Search)'}`);
   console.log(`[Scraper] TMDB discovery: ${TMDB_API_KEY ? 'ENABLED' : 'DISABLED (set TMDB_API_KEY for movie/TV database results)'}`);
@@ -120,7 +121,7 @@ async function searchForNewProductions() {
   const feedPromises = RSS_FEEDS.map(async (feed) => {
     try {
       const xml = await fetchUrl(feed.url);
-      const articles = parseRssFeed(xml, feed.name);
+      const articles = parseRssFeed(xml, feed.name, lookbackDays);
       sourcesChecked++;
       console.log(`[Scraper] ${feed.name}: ${articles.length} recent articles`);
       return articles;
@@ -965,7 +966,7 @@ async function scrapeScreenIrelandNews() {
 
 // --- RSS Parsing ---
 
-function parseRssFeed(xml, sourceName) {
+function parseRssFeed(xml, sourceName, lookbackDays = 2) {
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
@@ -985,8 +986,8 @@ function parseRssFeed(xml, sourceName) {
         : [parsed.feed.entry];
     }
 
-    // Only look at articles from the last 48 hours
-    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    // Only look at articles from the specified lookback period
+    const cutoff = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
 
     return items
       .map(item => ({

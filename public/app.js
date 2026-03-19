@@ -229,23 +229,30 @@ async function loadScrapeStatus() {
 }
 
 // === Manual Scrape Trigger ===
-async function triggerScrape() {
-  const btn = document.getElementById('btn-scrape');
+async function triggerScrape(days = 2) {
+  const btnId = days === 7 ? 'btn-scrape-week' : 'btn-scrape';
+  const btn = document.getElementById(btnId);
   const origHtml = btn.innerHTML;
   btn.innerHTML = '&#x23F3; Searching...';
   btn.disabled = true;
+  
+  // Also disable the other button to prevent concurrent searches
+  const otherBtnId = days === 7 ? 'btn-scrape' : 'btn-scrape-week';
+  const otherBtn = document.getElementById(otherBtnId);
+  otherBtn.disabled = true;
 
   try {
-    const res = await fetch('/api/scrape', { method: 'POST' });
+    const res = await fetch(`/api/scrape?days=${days}`, { method: 'POST' });
     const result = await res.json();
     loadProductions();
     loadScrapeStatus();
-    alert(`Search complete.\nSources checked: ${result.sourcesChecked}\nRelevant articles: ${result.relevantArticles}\nNew productions found: ${result.newProductionsFound}\n\n${result.message}`);
+    alert(`Search complete (${days} day lookback).\nSources checked: ${result.sourcesChecked}\nRelevant articles: ${result.relevantArticles}\nNew productions found: ${result.newProductionsFound}\n\n${result.message}`);
   } catch (err) {
     alert('Error running search: ' + err.message);
   } finally {
     btn.innerHTML = origHtml;
     btn.disabled = false;
+    otherBtn.disabled = false;
   }
 }
 

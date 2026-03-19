@@ -126,6 +126,7 @@ app.patch('/api/productions/:id', (req, res) => {
 });
 
 // POST /api/scrape - manually trigger a news search
+// Query param: ?days=N (optional, default 2) - number of days to look back for articles
 app.post('/api/scrape', scrapeLimiter, async (req, res) => {
   if (isScrapingInProgress) {
     return res.status(429).json({ error: 'A scrape operation is already in progress. Please wait.' });
@@ -133,7 +134,11 @@ app.post('/api/scrape', scrapeLimiter, async (req, res) => {
   
   try {
     isScrapingInProgress = true;
-    const results = await searchForNewProductions();
+    
+    // Get lookback days from query param (default to 2, max 30)
+    const days = Math.min(Math.max(parseInt(req.query.days) || 2, 1), 30);
+    
+    const results = await searchForNewProductions(days);
     lastScrapeTime = new Date().toISOString();
     lastScrapeResult = results;
     res.json(results);
