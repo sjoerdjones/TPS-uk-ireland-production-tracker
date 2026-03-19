@@ -43,6 +43,15 @@ function createSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  
+  // Migration: Add background column if it doesn't exist (for existing databases)
+  const columns = db.prepare("PRAGMA table_info(productions)").all();
+  const hasBackground = columns.some(col => col.name === 'background');
+  
+  if (!hasBackground) {
+    console.log('[Database] Adding background column to existing table');
+    db.exec('ALTER TABLE productions ADD COLUMN background TEXT');
+  }
 }
 
 function seedFromCsv() {
