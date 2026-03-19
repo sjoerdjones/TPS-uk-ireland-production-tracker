@@ -89,7 +89,8 @@ const INDUSTRY_SITES = [
   { name: 'Screen Ireland - Funding Decisions', url: 'https://www.screenireland.ie/funding/funding-decisions' },
   { name: 'BFC Filmography', url: 'https://britishfilmcommission.org.uk/filmography/' },
   { name: 'Screen Ireland - News', url: 'https://www.screenireland.ie/news' },
-  { name: 'Movie Insider', url: 'https://www.movieinsider.com/production-listings' },
+  { name: 'Movie Insider', url: 'https://www.movieinsider.com/news/category/production' },
+  { name: 'The Knowledge Online', url: 'https://theknowledgeonline.com/the-knowledge-news' },
 ];
 
 // TMDB genre ID mapping
@@ -251,9 +252,9 @@ async function searchForNewProductions(lookbackDays = 2) {
     }
   }
 
-  // 6. Industry site scraping - Movie Insider only (others still disabled due to quality issues)
+  // 6. Industry site scraping - Movie Insider and The Knowledge Online
   try {
-    // Only scrape Movie Insider
+    // Movie Insider
     const miProductions = await scrapeMovieInsider();
     sourcesChecked++;
     for (let production of miProductions) {
@@ -276,6 +277,32 @@ async function searchForNewProductions(lookbackDays = 2) {
     }
   } catch (err) {
     console.warn(`[Scraper] Movie Insider scraping failed: ${err.message}`);
+  }
+
+  // 7. The Knowledge Online
+  try {
+    const tkoProductions = await scrapeTheKnowledgeOnline();
+    sourcesChecked++;
+    for (let production of tkoProductions) {
+      // Enrich with OMDb if enabled
+      if (OMDB_API_KEY) {
+        try {
+          const enriched = await enrichWithOMDB(production);
+          if (enriched) production = enriched;
+        } catch (err) {
+          console.warn(`[Scraper/OMDb] Failed to enrich "${production.title}": ${err.message}`);
+        }
+      }
+
+      const result = insertProduction(production);
+      if (result) {
+        newCount++;
+        newTitles.push(production.title);
+        console.log(`[Scraper] NEW (The Knowledge Online): ${production.title}`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[Scraper] The Knowledge Online scraping failed: ${err.message}`);
   }
 
   const results = {
@@ -1402,72 +1429,96 @@ function fetchUrl(url) {
 }
 
 async function scrapeMovieInsider() {
-  const html = await fetchUrl('https://www.movieinsider.com/production-listings');
+  const html = await fetchUrl('https://www.movieinsider.com/news/category/production');
   const $ = cheerio.load(html);
   const productions = [];
 
-  // Movie Insider lists productions in structured format
-  // Look for production entries/cards
-  $('.movie, .production, article, .listing-item, [class*="film"]').each((_, el) => {
-    const title = $(el).find('h2, h3, h4, .title, .movie-title, a.title').first().text().trim();
-    const description = $(el).find('p, .description, .synopsis, .plot').first().text().trim();
-    const link = $(el).find('a').first().attr('href') || '';
+  // Scrape news articles about productions
+  $('article, .post, .news-item, [class*="article"]').each((_, el) => {
+    const titleEl = $(el).find('h2, h3, h4, .title, .post-title').first();
+    const title = titleEl.text().trim();
+    const description = $(el).find('p, .excerpt, .description').first().text().trim();
+    const link = $(el).find('a').first().attr('href') || titleEl.find('a').attr('href') || '';
     const fullText = $(el).text();
 
-    if (title && title.length > 2 && title.length < 150) {
-      // Check for UK/Ireland relevance
-      const isRelevant = UK_IRELAND_KEYWORDS.some(kw => fullText.toLowerCase().includes(kw));
+    if (title && title.length > 10) {
+      // Check for UK/Ireland relevance AND production keywords
+      const hasUkIreland = UK_IRELAND_KEYWORDS.some(kw => fullText.toLowerCase().includes(kw));
+      const hasProduction = PRODUCTION_KEYWORDS.some(kw => fullText.toLowerCase().includes(kw));
       
-      if (isRelevant) {
+      if (hasUkIreland && hasProduction) {
         let type = 'Movie';
         if (/\b(series|season|tv|television)\b/i.test(fullText)) {
           type = 'TV Series';
         }
 
+        // Extract production title from article title
+        const productionTitle = extractProductionTitle(title) || title.substring(0, 100);
+
         productions.push({
-          title,
+          title: productionTitle,
           type,
           genre: extractGenre(fullText) || 'Not specified',
-          synopsis: description.substring(0, 300) || 'UK/Ireland production listed on Movie Insider',
+          synopsis: description.substring(0, 300) || 'Production news from Movie Insider',
           release_year: extractYear(fullText) || 'TBD',
           publication_date: new Date().toISOString().split('T')[0],
           studio: extractStudio(fullText) || 'See Movie Insider for details',
           personnel: extractPersonnel(fullText) || 'Personnel details on Movie Insider',
-          source_title: `Movie Insider: ${title}`,
+          source_title: title.substring(0, 150),
           source_url: link.startsWith('http') ? link : `https://www.movieinsider.com${link}`,
         });
       }
     }
   });
 
-  // Also try simpler selectors for links
-  $('a[href*="/m/"]').each((_, el) => {
-    const title = $(el).text().trim();
-    const href = $(el).attr('href') || '';
-    const context = $(el).parent().text();
-    
-    if (title.length > 2 && title.length < 100 && !productions.find(p => p.title === title)) {
-      // Check for UK/Ireland relevance in surrounding context
-      const isRelevant = UK_IRELAND_KEYWORDS.some(kw => context.toLowerCase().includes(kw));
+  console.log(`[Scraper/MovieInsider] Found ${productions.length} UK/Ireland productions`);
+  return productions;
+}
+
+async function scrapeTheKnowledgeOnline() {
+  const html = await fetchUrl('https://theknowledgeonline.com/the-knowledge-news');
+  const $ = cheerio.load(html);
+  const productions = [];
+
+  // Scrape news articles
+  $('article, .news-item, .post, [class*="article"]').each((_, el) => {
+    const titleEl = $(el).find('h2, h3, h4, .title, .headline').first();
+    const title = titleEl.text().trim();
+    const description = $(el).find('p, .excerpt, .summary, .description').first().text().trim();
+    const link = $(el).find('a').first().attr('href') || titleEl.find('a').attr('href') || '';
+    const fullText = `${title} ${description}`.toLowerCase();
+
+    if (title && title.length > 10) {
+      // Check for UK/Ireland AND production relevance
+      const hasUkIreland = UK_IRELAND_KEYWORDS.some(kw => fullText.includes(kw));
+      const hasProduction = PRODUCTION_KEYWORDS.some(kw => fullText.includes(kw));
       
-      if (isRelevant) {
+      if (hasUkIreland && hasProduction) {
+        let type = 'Movie';
+        if (/\b(series|season|tv|television|drama series)\b/i.test(fullText)) {
+          type = 'TV Series';
+        }
+
+        // Extract production title from article title
+        const productionTitle = extractProductionTitle(title) || title.substring(0, 100);
+
         productions.push({
-          title,
-          type: 'Movie',
-          genre: 'Not specified',
-          synopsis: 'UK/Ireland production listed on Movie Insider',
-          release_year: extractYear(context) || 'TBD',
+          title: productionTitle,
+          type,
+          genre: extractGenre(fullText) || 'Not specified',
+          synopsis: description.substring(0, 300) || 'Production news from The Knowledge Online',
+          release_year: extractYear(fullText) || 'TBD',
           publication_date: new Date().toISOString().split('T')[0],
-          studio: extractStudio(context) || 'See Movie Insider for details',
-          personnel: extractPersonnel(context) || 'Personnel details on Movie Insider',
-          source_title: `Movie Insider: ${title}`,
-          source_url: href.startsWith('http') ? href : `https://www.movieinsider.com${href}`,
+          studio: extractStudio(fullText) || 'UK/Ireland Production',
+          personnel: extractPersonnel(fullText) || 'See The Knowledge Online for details',
+          source_title: title.substring(0, 150),
+          source_url: link.startsWith('http') ? link : `https://theknowledgeonline.com${link}`,
         });
       }
     }
   });
 
-  console.log(`[Scraper/MovieInsider] Found ${productions.length} UK/Ireland productions`);
+  console.log(`[Scraper/TheKnowledgeOnline] Found ${productions.length} UK/Ireland productions`);
   return productions;
 }
 
