@@ -287,8 +287,8 @@ body {
 }
 
 .card-body {
-  overflow: hidden;
-  max-height: 1000px;
+  overflow-y: auto;
+  max-height: 600px;
   transition: max-height 0.3s ease, margin-top 0.3s ease;
   margin-top: 16px;
 }
@@ -348,6 +348,9 @@ body {
 /* === Enriched Data Section === */
 .enriched-section {
   margin-top: 20px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 8px;
 }
 
 .enriched-header {
@@ -385,6 +388,29 @@ body {
 
 .enriched-list a:hover {
   text-decoration: underline;
+}
+
+/* Custom scrollbar styling */
+.card-body::-webkit-scrollbar,
+.enriched-section::-webkit-scrollbar {
+  width: 8px;
+}
+
+.card-body::-webkit-scrollbar-track,
+.enriched-section::-webkit-scrollbar-track {
+  background: #f0f0f0;
+  border-radius: 4px;
+}
+
+.card-body::-webkit-scrollbar-thumb,
+.enriched-section::-webkit-scrollbar-thumb {
+  background: #A1A299;
+  border-radius: 4px;
+}
+
+.card-body::-webkit-scrollbar-thumb:hover,
+.enriched-section::-webkit-scrollbar-thumb:hover {
+  background: #44755B;
 }
 
 /* === Action Buttons === */
