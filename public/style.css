@@ -345,6 +345,48 @@ body {
   color: #44755B;
 }
 
+/* === Enriched Data Section === */
+.enriched-section {
+  margin-top: 20px;
+}
+
+.enriched-header {
+  font-size: 15px;
+  font-weight: 700;
+  color: #44755B;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #44755B;
+}
+
+.enriched-field {
+  margin-bottom: 16px;
+}
+
+.enriched-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0 0;
+}
+
+.enriched-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.enriched-list li:last-child {
+  border-bottom: none;
+}
+
+.enriched-list a {
+  color: #44755B;
+  text-decoration: none;
+}
+
+.enriched-list a:hover {
+  text-decoration: underline;
+}
+
 /* === Action Buttons === */
 .card-actions-divider {
   border: none;
@@ -398,6 +440,30 @@ body {
 .action-btn.archive:hover {
   background: #464642;
   color: #fff;
+}
+
+.action-btn.dig-deeper {
+  background: #fff;
+  border-color: #44755B;
+  color: #44755B;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.action-btn.dig-deeper:hover {
+  background: #44755B;
+  color: #fff;
+}
+
+.action-btn.dig-deeper svg {
+  width: 16px;
+  height: 16px;
+}
+
+.action-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* Status badges (shown after action) */

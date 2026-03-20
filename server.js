@@ -4,8 +4,9 @@ const path = require('path');
 const cron = require('node-cron');
 const basicAuth = require('express-basic-auth');
 const rateLimit = require('express-rate-limit');
-const { getDb, getAllProductions, updateStatus } = require('./db');
+const { getDb, getAllProductions, updateStatus, updateEnrichedData, getProductionById } = require('./db');
 const { searchForNewProductions } = require('./scraper');
+const { digDeeper } = require('./dig-deeper');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -127,6 +128,44 @@ app.patch('/api/productions/:id', (req, res) => {
     res.json({ success: true, id: Number(id), status });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/productions/:id/dig-deeper - perform deep research on a production
+app.post('/api/productions/:id/dig-deeper', apiLimiter, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const production = getProductionById(Number(id));
+    
+    if (!production) {
+      return res.status(404).json({ error: 'Production not found' });
+    }
+    
+    // If already researched, return cached data
+    if (production.dig_deeper && production.enriched_data) {
+      console.log(`[API] Returning cached research for: ${production.title}`);
+      return res.json({
+        success: true,
+        cached: true,
+        data: production.enriched_data,
+      });
+    }
+    
+    // Perform deep research
+    console.log(`[API] Starting deep research for: ${production.title}`);
+    const enrichedData = await digDeeper(production);
+    
+    // Save to database
+    updateEnrichedData(Number(id), enrichedData);
+    
+    res.json({
+      success: true,
+      cached: false,
+      data: enrichedData,
+    });
+  } catch (err) {
+    console.error(`[API] Dig deeper failed:`, err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

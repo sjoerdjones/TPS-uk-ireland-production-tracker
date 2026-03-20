@@ -51,6 +51,19 @@ function renderCards(productions) {
   }
 
   container.innerHTML = productions.map(p => createCard(p)).join('');
+  
+  // Check if we should expand a specific card (after dig deeper)
+  const expandedCardId = sessionStorage.getItem('expandedCardId');
+  if (expandedCardId) {
+    const cardToExpand = document.querySelector(`.card[data-id="${expandedCardId}"]`);
+    if (cardToExpand) {
+      cardToExpand.classList.remove('collapsed');
+      // Scroll to the card
+      cardToExpand.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    // Clear the stored ID
+    sessionStorage.removeItem('expandedCardId');
+  }
 }
 
 function createCard(p) {
@@ -71,6 +84,11 @@ function createCard(p) {
     <polyline points="21 8 21 21 3 21 3 8"></polyline>
     <rect x="1" y="3" width="22" height="5"></rect>
     <line x1="10" y1="12" x2="14" y2="12"></line>
+  </svg>`;
+
+  const searchIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11" cy="11" r="8"></circle>
+    <path d="m21 21-4.35-4.35"></path>
   </svg>`;
 
   // Determine active states for icon buttons
@@ -134,13 +152,181 @@ function createCard(p) {
       </div>
       <hr class="card-actions-divider">
       <div class="card-actions">
+        <button class="action-btn dig-deeper" onclick="digDeeper(${p.id})">${searchIcon} Dig Deeper</button>
         <button class="action-btn greenlight" onclick="setStatus(${p.id}, 'greenlight')">Greenlight</button>
         <button class="action-btn not-interested" onclick="setStatus(${p.id}, 'not_interested')">Not Interested</button>
         <button class="action-btn archive" onclick="setStatus(${p.id}, 'archived')">Archive</button>
       </div>
+      ${p.enriched_data ? renderEnrichedData(p.enriched_data) : ''}
       </div>
     </article>
   `;
+}
+
+function renderEnrichedData(enrichedDataJson) {
+  let data;
+  try {
+    data = typeof enrichedDataJson === 'string' ? JSON.parse(enrichedDataJson) : enrichedDataJson;
+  } catch (err) {
+    console.error('Failed to parse enriched data:', err);
+    return '';
+  }
+
+  let html = '<div class="enriched-section">';
+  html += '<hr class="card-divider">';
+  html += '<div class="enriched-header">Dig Deeper Results</div>';
+  
+  // IMDb Link
+  if (data.imdb_url) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">IMDb</div>`;
+    html += `<div class="field-value"><a href="${escapeHtml(data.imdb_url)}" target="_blank" rel="noopener">${escapeHtml(data.imdb_url)}</a>`;
+    if (data.imdb_rating) {
+      html += ` (Rating: ${escapeHtml(data.imdb_rating)})`;
+    }
+    html += '</div></div>';
+  }
+  
+  // Detailed Synopsis
+  if (data.detailed_synopsis) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">Detailed Synopsis</div>`;
+    html += `<div class="field-value">${escapeHtml(data.detailed_synopsis)}</div>`;
+    html += '</div>';
+  }
+  
+  // Themes
+  if (data.themes) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">Themes & Tone</div>`;
+    html += `<div class="field-value">${escapeHtml(data.themes)}</div>`;
+    html += '</div>';
+  }
+  
+  // Director
+  if (data.director && data.director.length > 0) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">Director(s)</div>`;
+    html += '<div class="field-value"><ul class="enriched-list">';
+    data.director.forEach(person => {
+      html += `<li><strong>${escapeHtml(person.name)}</strong>`;
+      if (person.notable_works) html += ` (${escapeHtml(person.notable_works)})`;
+      html += '</li>';
+    });
+    html += '</ul></div></div>';
+  }
+  
+  // Writer
+  if (data.writer && data.writer.length > 0) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">Writer(s)</div>`;
+    html += '<div class="field-value"><ul class="enriched-list">';
+    data.writer.forEach(person => {
+      html += `<li><strong>${escapeHtml(person.name)}</strong>`;
+      if (person.notable_works) html += ` (${escapeHtml(person.notable_works)})`;
+      html += '</li>';
+    });
+    html += '</ul></div></div>';
+  }
+  
+  // Cast
+  if (data.cast && data.cast.length > 0) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">Cast</div>`;
+    html += '<div class="field-value"><ul class="enriched-list">';
+    data.cast.forEach(member => {
+      html += `<li><strong>${escapeHtml(member.name)}</strong>`;
+      if (member.character) html += ` as ${escapeHtml(member.character)}`;
+      html += '</li>';
+    });
+    html += '</ul></div></div>';
+  }
+  
+  // Producers
+  if (data.producers && data.producers.length > 0) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">Producers</div>`;
+    html += '<div class="field-value"><ul class="enriched-list">';
+    data.producers.forEach(name => {
+      html += `<li>${escapeHtml(name)}</li>`;
+    });
+    html += '</ul></div></div>';
+  }
+  
+  // Production Details
+  const hasProductionDetails = data.production_companies || data.filming_locations || data.production_status || 
+                                data.filming_dates || data.budget || data.episodes;
+  if (hasProductionDetails) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">Production Details</div>`;
+    html += '<div class="field-value"><ul class="enriched-list">';
+    
+    if (data.production_companies) {
+      const companies = Array.isArray(data.production_companies) 
+        ? data.production_companies.join(', ') 
+        : data.production_companies;
+      html += `<li><strong>Companies:</strong> ${escapeHtml(companies)}</li>`;
+    }
+    
+    if (data.filming_locations) {
+      const locations = Array.isArray(data.filming_locations) 
+        ? data.filming_locations.join(', ') 
+        : data.filming_locations;
+      html += `<li><strong>Locations:</strong> ${escapeHtml(locations)}</li>`;
+    }
+    
+    if (data.production_status) html += `<li><strong>Status:</strong> ${escapeHtml(data.production_status)}</li>`;
+    
+    if (data.filming_dates) {
+      if (data.filming_dates.start) html += `<li><strong>Start Date:</strong> ${escapeHtml(data.filming_dates.start)}</li>`;
+      if (data.filming_dates.end) html += `<li><strong>End Date:</strong> ${escapeHtml(data.filming_dates.end)}</li>`;
+    }
+    
+    if (data.budget) html += `<li><strong>Budget:</strong> ${escapeHtml(data.budget)}</li>`;
+    if (data.episodes) html += `<li><strong>Episodes:</strong> ${escapeHtml(data.episodes)}</li>`;
+    
+    html += '</ul></div></div>';
+  }
+  
+  // Distribution
+  if (data.distributor || data.release_date || data.platform) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">Distribution</div>`;
+    html += '<div class="field-value"><ul class="enriched-list">';
+    
+    if (data.distributor) {
+      const distributors = Array.isArray(data.distributor) 
+        ? data.distributor.join(', ') 
+        : data.distributor;
+      html += `<li><strong>Distributor:</strong> ${escapeHtml(distributors)}</li>`;
+    }
+    
+    if (data.release_date) html += `<li><strong>Release Date:</strong> ${escapeHtml(data.release_date)}</li>`;
+    if (data.platform) html += `<li><strong>Platform:</strong> ${escapeHtml(data.platform)}</li>`;
+    
+    html += '</ul></div></div>';
+  }
+  
+  // Recent News
+  if (data.recent_news && data.recent_news.length > 0) {
+    html += `<div class="enriched-field">`;
+    html += `<div class="field-label">Recent News</div>`;
+    html += '<div class="field-value"><ul class="enriched-list">';
+    data.recent_news.forEach(news => {
+      html += '<li>';
+      if (news.source_url) {
+        html += `<a href="${escapeHtml(news.source_url)}" target="_blank" rel="noopener"><strong>${escapeHtml(news.headline)}</strong></a>`;
+      } else {
+        html += `<strong>${escapeHtml(news.headline)}</strong>`;
+      }
+      if (news.date) html += ` (${escapeHtml(news.date)})`;
+      html += '</li>';
+    });
+    html += '</ul></div></div>';
+  }
+  
+  html += '</div>';
+  return html;
 }
 
 function toggleCard(headerEl) {
@@ -149,6 +335,43 @@ function toggleCard(headerEl) {
 }
 
 // === Actions ===
+async function digDeeper(id) {
+  const card = document.querySelector(`.card[data-id="${id}"]`);
+  const btn = card.querySelector('.action-btn.dig-deeper');
+  const origHtml = btn.innerHTML;
+  
+  btn.innerHTML = '&#x23F3; Researching...';
+  btn.disabled = true;
+  
+  try {
+    const res = await fetch(`/api/productions/${id}/dig-deeper`, {
+      method: 'POST',
+    });
+    
+    if (!res.ok) {
+      const err = await res.json();
+      alert('Error: ' + err.error);
+      return;
+    }
+    
+    const result = await res.json();
+    
+    // Store the ID to keep it expanded after reload
+    sessionStorage.setItem('expandedCardId', id);
+    
+    // Reload to show enriched data
+    await loadProductions();
+    
+    alert('Research complete! The card has been expanded to show detailed information.');
+  } catch (err) {
+    console.error(err);
+    alert('Failed to research production.');
+  } finally {
+    btn.innerHTML = origHtml;
+    btn.disabled = false;
+  }
+}
+
 async function setStatus(id, status) {
   try {
     const res = await fetch(`/api/productions/${id}`, {

@@ -40,6 +40,8 @@ function createSchema() {
       source_title TEXT,
       source_url TEXT,
       status TEXT DEFAULT 'new',
+      dig_deeper BOOLEAN DEFAULT 0,
+      enriched_data TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
@@ -47,10 +49,22 @@ function createSchema() {
   // Migration: Add background column if it doesn't exist (for existing databases)
   const columns = db.prepare("PRAGMA table_info(productions)").all();
   const hasBackground = columns.some(col => col.name === 'background');
+  const hasDigDeeper = columns.some(col => col.name === 'dig_deeper');
+  const hasEnrichedData = columns.some(col => col.name === 'enriched_data');
   
   if (!hasBackground) {
     console.log('[Database] Adding background column to existing table');
     db.exec('ALTER TABLE productions ADD COLUMN background TEXT');
+  }
+  
+  if (!hasDigDeeper) {
+    console.log('[Database] Adding dig_deeper column to existing table');
+    db.exec('ALTER TABLE productions ADD COLUMN dig_deeper BOOLEAN DEFAULT 0');
+  }
+  
+  if (!hasEnrichedData) {
+    console.log('[Database] Adding enriched_data column to existing table');
+    db.exec('ALTER TABLE productions ADD COLUMN enriched_data TEXT');
   }
 }
 
@@ -117,6 +131,26 @@ function updateStatus(id, status) {
   return db.prepare('UPDATE productions SET status = ? WHERE id = ?').run(status, id);
 }
 
+function updateEnrichedData(id, enrichedData) {
+  return db.prepare(`
+    UPDATE productions 
+    SET dig_deeper = 1, enriched_data = ? 
+    WHERE id = ?
+  `).run(JSON.stringify(enrichedData), id);
+}
+
+function getProductionById(id) {
+  const prod = db.prepare('SELECT * FROM productions WHERE id = ?').get(id);
+  if (prod && prod.enriched_data) {
+    try {
+      prod.enriched_data = JSON.parse(prod.enriched_data);
+    } catch (e) {
+      prod.enriched_data = null;
+    }
+  }
+  return prod;
+}
+
 function insertProduction(prod) {
   // Validate required fields
   if (!prod || !prod.title || !prod.type) {
@@ -152,4 +186,4 @@ function insertProduction(prod) {
   }
 }
 
-module.exports = { getDb, getAllProductions, updateStatus, insertProduction };
+module.exports = { getDb, getAllProductions, updateStatus, insertProduction, updateEnrichedData, getProductionById };
